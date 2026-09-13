@@ -184,6 +184,7 @@ CLI tools for interacting with external services and platforms.
 | **hf-cli** | Hugging Face CLI: model download/upload, inference, dataset management |
 | **llama-cpp** | llama.cpp expert: llama-server, llama-cli, local LLM inference with GPU acceleration |
 | **nextcloud-cli** | Nextcloud sync (nextcloudcmd): file synchronization with remote servers |
+| **plnk-cli** | `plnk` CLI for self-hosted Planka kanban: projects/boards/lists/cards/tasks/comments/labels/custom fields, scoped finds, JSON output. Needs the `plnk` binary |
 | **trello-cli** | Trello CLI: boards/cards/lists management via JSON operations |
 
 ### Knowledge Management
@@ -192,9 +193,10 @@ Skills for organizing and managing knowledge bases.
 | Skill | Description |
 |-------|-------------|
 | **code-summarizer** | Codebase summarization from local dirs or GitHub/GitLab URLs |
-| **morning-ritual** | Structured morning ritual: pull tasks from Obsidian, surface due/urgent items, identify MITs |
+| **morning-ritual** | ⚠️ Deprecated — replaced by **quest-system** (calendar + task collection absorbed, MITs replaced by goal-first quests) |
 | **obsidian-master** | Complete Obsidian vault control via CLI: read/edit/search/links/tasks/properties/plugins |
 | **obsidian-open-loops-collector** | Collect open loops from Obsidian: tasks, TODOs, dangling thoughts, stub notes |
+| **quest-system** | Goal-first daily work system ("Captain's Log"): calendar + task briefing, lat economy, ranks, streaks. Replaces morning-ritual |
 
 ### Development Tools & Strategy
 Skills for development workflows and strategic planning.
@@ -202,10 +204,12 @@ Skills for development workflows and strategic planning.
 | Skill                         | Description                                                                                     |
 | -------------------------------| -------------------------------------------------------------------------------------------------|
 | **ai-agent-skills-assistant** | Navigate the AI Agent Skills repo: install skills/agents/extensions, discover capabilities      |
+| **code-doctor**             | Diagnose structural codebase problems (god classes, circular deps, SOLID anti-patterns) with actionable findings and example diffs |
 | **dev-brainstorming**         | Principal Engineer/Strategist: architectural ideas, feature extensions, refactoring, innovation |
 | **file-organizer**            | Intelligent file/folder organization: context awareness, duplicates, structure suggestions      |
 | **frontend-web-developer**    | Full-stack web dev: React, Next.js, Tailwind CSS v4, modern frontend best practices             |
 | **opencode-agent-creator**    | Create/manage Opencode Agents (primary/subagents)                                               |
+| **ponytail**                  | Forces the laziest working solution: YAGNI, stdlib before custom code, minimal over bloated (lite/full/ultra) |
 | **pi-subagents-master**       | Create/manage pi subagent configurations and multi-agent pipelines                              |
 | **product-prd-brainstorming** | Generate PRDs with Mermaid system architecture diagrams                                         |
 | **python-api-developer**      | Python API development: REST, FastAPI/Flask, auth, testing, deployment                          |

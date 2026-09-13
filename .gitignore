@@ -1,6 +1,7 @@
 .opencode/
 .claude/
 .pi/
+.pi-subagents/
 .codex/
 
 node_modules/

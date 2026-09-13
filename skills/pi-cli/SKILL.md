@@ -68,7 +68,7 @@ pi --model "*sonnet*" "..."
 
 # With thinking level shorthand
 pi --model sonnet:high "Solve this complex problem"
-pi --thinking high "..."   # off | minimal | low | medium | high | xhigh
+pi --thinking high "..."   # off | minimal | low | medium | high | xhigh | max
 
 # Cycle through multiple models with Ctrl+P
 pi --models claude-sonnet,claude-haiku,gpt-4o
@@ -91,7 +91,7 @@ pi --tools read,bash,edit,write,grep,find,ls "..."
 # Read-only (no file modifications)
 pi --tools read,grep,find,ls -p "Review the code in src/"
 
-# Disable all built-in tools
+# Disable all tools (built-in and extension)
 pi --no-tools "..."
 ```
 
@@ -179,8 +179,9 @@ pi --mcp-config /path/to/mcp-config.json "..."
 
 | Variable                        | Purpose                                         |
 |---------------------------------|-------------------------------------------------|
+| `ANTHROPIC_AUTH_TOKEN`          | Anthropic bearer auth token                     |
 | `ANTHROPIC_API_KEY`             | Anthropic Claude API key                        |
-| `ANTHROPIC_OAUTH_TOKEN`         | Alternative OAuth token for Anthropic           |
+| `ANTHROPIC_OAUTH_TOKEN`         | Anthropic OAuth token (alternative to API key)  |
 | `OPENAI_API_KEY`                | OpenAI GPT API key                               |
 | `AZURE_OPENAI_API_KEY`          | Azure OpenAI API key                              |
 | `AZURE_OPENAI_BASE_URL`         | Azure OpenAI base URL                              |
@@ -206,7 +207,7 @@ pi --mcp-config /path/to/mcp-config.json "..."
 | `PI_PACKAGE_DIR`                | Override package directory (Nix/Guix)           |
 | `PI_OFFLINE`                    | Set to `1`/`true`/`yes` to disable network ops  |
 | `PI_TELEMETRY`                  | Override install telemetry (1/true or 0/false)   |
-| `PI_SHARE_VIEWER_URL`           | Base URL for `/share` command                   |
+| `PI_SHARE_VIEWER_URL`           | Base URL for `/share` command (default: https://pi.dev/session/) |
 | `PI_AI_ANTIGRAVITY_VERSION`     | Override Antigravity User-Agent version         |
 
 ## Common Patterns
