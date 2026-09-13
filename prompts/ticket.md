@@ -28,7 +28,7 @@ ${1:-
 
 ## Ticket Format
 
-For each distinct requirement found, create a ticket file at `.tickets/<feature-name>/<ticket-id>.md` with this structure:
+For each distinct requirement found, create a ticket file at `.tickets/<order-number><feature-name>/<ticket-id>.md` with this structure:
 
 ```markdown
 ---
@@ -56,7 +56,7 @@ status: pending
 
 ## Ticket ID Convention
 
-Use format: `<module>-<sequence>` (e.g., `vm-01`, `config-02`, `auth-03`)
+Use format: `<order-number>-<module>-<sequence>` (e.g., `vm-01`, `config-02`, `auth-03`)
 
 ## Rules
 
@@ -67,6 +67,7 @@ Use format: `<module>-<sequence>` (e.g., `vm-01`, `config-02`, `auth-03`)
 5. Set `status: pending` for all generated tickets.
 6. Do not modify `status`, `started`, or `completed` fields — the chain handles that.
 7. If multiple tickets are generated, list them at the end with their IDs.
+8. Tickets MUST BE numbered sequentially using an `order-number` prefix starting with `01` onwards
 
 ## Output
 
