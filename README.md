@@ -1,117 +1,72 @@
-# AI Agent Skills and Agents Repository
+# AI Agent Skills
 
-This repository contains various skills, agents, extensions, and tools for AI agents, organized in a structured manner to support different capabilities and functionalities.
-These are implemented to be used exclusively by AI agents like opencode, Claude Code, pi, and other compatible agents.
+**Your coding agent is already smart. These skills make it *good at your specific life.***
 
-## Overview
+You know how it goes: you're deep in a session with Claude Code, pi, or opencode, and you wish it just... *knew* how you run Docker, or how your Obsidian vault is structured, or the exact tmux incantation you need. Instead of copy-pasting context into the chat every time, you teach it once — as a **skill** — and from then on it works the way a colleague who actually read the documentation would.
 
-This repository provides agent configurations, extensions, and specialized skills for AI coding agents including opencode, Claude Code, pi, and others. Skills cover CLI tooling, file organization, system monitoring, knowledge management, infrastructure automation, and development strategy.
+That's what this repo is: **47+ ready-made skills, agents, and extensions collection** I use daily, packaged so you can drop them into any compatible agent in one command. No SDK, no framework, no build step — each skill is a small folder with a `SKILL.md` (the instructions) and a few supporting scripts.
 
-## Quick Start with an AI Agent
+**A few favorites to get a feel for it:**
 
-This repository ships an [Agent Skills](https://agentskills.io)-compatible skill that gives any compatible AI agent (Claude Code, pi, etc.) full context about the available automations, how to configure them, and how to run them.
+- `caveman` — your agent starts talking like a caveman and cuts token usage by ~75%. (Yes, this is a real thing.)
+- `ponytail` — forces the agent to pick the *laziest solution that actually works*. Kills over-engineering on sight.
+- 🔧 `docker-cli`, `tmux-specialist`, `terraform` — expert-level CLI knowledge for the tools you use every day
+- 🧠 `quest-system` — a goal-first daily work system that briefs your agent on your calendar and tasks each morning
+- 🕵️ `code-doctor` — diagnoses structural codebase problems (god classes, circular deps) with actionable findings
 
-Point your agent at the skill file:
+You install the ones you need, skip the rest, and your agent quietly becomes more useful. That's the whole pitch.
+
+> Works with **opencode**, **pi**, **Claude Code**, **codex**, and other [Agent Skills](https://agentskills.io)-compatible agents.
+
+## 30-Second Quick Start
+
+The fastest way in: point your agent at this repo and let it introduce itself.
+
 ```
 read the skill definition in skills/ai-agent-skills-assistant/SKILL.md and guide me through using this repository
 ```
 
-The agent will read the README and discover available scripts on its own, then guide you interactively.
+The agent reads the skill, discovers what's available, and walks you through it interactively. Or skip straight to the install script below:
+
+```bash
+./install-skill.sh --interactive   # guided picker — choose exactly what you want
+```
 
 ## Installation
 
-### Quick Start (Recommended)
+Each category (skills, agents, extensions) has its own guided installer. All three support `--interactive` for a step-by-step wizard:
 
-#### Installing Skills
-
-Use the provided installation script for an easy, guided experience:
-
-```bash
-# Interactive installation wizard (recommended for first-time users)
-./install-skill.sh --interactive
-
-# show all installation options
-./install-skill.sh --help
-```
-
-#### Installing Extensions
-
-##### Extensions Disclaimer
-Most of the extensions stem from the [ai-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions).
-
-For coding agent extensions:
+### Skills
 
 ```bash
 # Interactive installation wizard (recommended)
-./install-extension.sh --interactive
+./install-skill.sh --interactive
 
-# show all installation options
-./install-extension.sh --help
+# see all installation options
+./install-skill.sh --help
 ```
 
-#### Installing Agents
-
-For agent configurations:
+### Agents
 
 ```bash
 # Interactive installation wizard (recommended)
 ./install-agent.sh --interactive
 
-# show all installation options
+# see all installation options
 ./install-agent.sh --help
 ```
 
-### Manual Installation
+### Extensions
 
-#### opencode
-
-```bash
-# Clone this repository
-git clone https://github.com/julweber/ai_agent_skills
-cd ai_agent_skills
-
-# Link skills to opencode config directory
-mkdir -p ~/.config/opencode/skills
-ln -sf "$(pwd)/skills" ~/.config/opencode/skills
-```
-
-The linked skills will automatically be available to your opencode agent.
-
-#### pi
+> Most extensions stem from [ai-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions).
 
 ```bash
-# Clone this repository
-git clone https://github.com/julweber/ai_agent_skills
-cd ai_agent_skills
+# Interactive installation wizard (recommended)
+./install-extension.sh --interactive
 
-# Link skills to pi project directory
-mkdir -p .pi/agent/skills
-ln -sf "$(pwd)/skills" .pi/agent/skills
-
-# Link extensions (optional)
-mkdir -p .pi/agent/extensions
-ln -sf "$(pwd)/extensions/pi/fetch-tool" .pi/agent/extensions/fetch-tool
-
-# Link agents (optional)
-mkdir -p .pi/agents
-ln -sf "$(pwd)/agents/pi" .pi/agents/pi
+# see all installation options
+./install-extension.sh --help
 ```
-
-The linked skills, extensions, and agents will automatically be available to your pi when working within this project.
-
-#### claude
-
-```bash
-# Clone this repository
-git clone https://github.com/julweber/ai_agent_skills
-cd ai_agent_skills
-
-# Link skills to Claude config directory
-mkdir -p ~/.claude/skills
-ln -sf "$(pwd)/skills" ~/.claude/skills
-```
-
-The linked skills will automatically be available to your Claude agent.
 
 ## Supported Agents
 
@@ -138,8 +93,6 @@ The repository is organized into logical sections for different agent capabiliti
 - Root-level installers (`install-skill.sh`, `install-agent.sh`, `install-extension.sh`) for easy setup
 
 ## Available Skills
-
-The repository contains skills organized by domain:
 
 ### Coding Agent CLIs
 These skills provide expert control over specific coding agent CLI tools.
@@ -278,7 +231,8 @@ The runner exits with code `0` when all suites pass and `1` if any suite fails.
 
 ## Contributing
 
-Contributions are welcome! Please follow these steps:
+Contributions are very welcome — especially skills for tools you use daily that aren't covered here. To contribute:
+
 
 1. Fork the repository
 2. Create a new branch for your feature
@@ -290,7 +244,15 @@ Contributions are welcome! Please follow these steps:
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-# Interesting external skills
+## Credits & Attribution
+
+Some skills in this repo were adapted from other projects — thanks to their authors:
+
+- 🐘 **caveman** — adapted from [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman). *why use many token when few do trick.*
+- 🐴 **ponytail** — adapted from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail).
+
+## Interesting external skills
+
 - [superpowers](https://github.com/obra/superpowers)
 - [agent-skill-creator](https://github.com/FrancyJGLisboa/agent-skill-creator)
 - [obsidian-skills](https://github.com/kepano/obsidian-skills)
