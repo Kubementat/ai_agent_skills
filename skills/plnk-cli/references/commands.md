@@ -1,0 +1,390 @@
+# plnk Command Reference
+
+Complete listing of every command, flag, and usage pattern.
+
+This file is optimized for agent lookup. When using it from Pi:
+
+- first identify the resource: project, board, list, card, task, comment, label, attachment, membership, user, or auth
+- then identify the operation: list, get, find, create, update, move, archive, delete, add/remove, snapshot
+- prefer the narrowest scope possible
+- prefer `--output json` for machine work
+- if syntax is still unclear, fall back to `plnk --help --output json` or `plnk <resource> <action> --help --output json`
+
+## Quick Lookup by Intent
+
+| Intent | Command pattern |
+|---|---|
+| list projects | `plnk project list` |
+| find a project by name | `plnk project find --name <name>` |
+| list boards in a project | `plnk board list --project <projectId>` |
+| find a board by name | `plnk board find --project <projectId> --name <name>` |
+| list lists on a board | `plnk list list --board <boardId>` |
+| find a list by name | `plnk list find --board <boardId> --name <name>` |
+| list cards in a list | `plnk card list --list <listId>` |
+| find cards by title | `plnk card find --list <listId> --title <title>` or broader board/project scopes |
+| read one card with nested state | `plnk card snapshot <cardId> --output json` |
+| create a card | `plnk card create --list <listId> --title <title>` |
+| update a card title/description | `plnk card update <cardId> ...` |
+| move a card | `plnk card move <cardId> --to-list <listId>` |
+| archive/unarchive a card | `plnk card archive <cardId>` / `plnk card unarchive <cardId>` |
+| list tasks on a card | `plnk task list --card <cardId>` |
+| add a task to a card | `plnk task create --card <cardId> --title <title>` |
+| list comments on a card | `plnk comment list --card <cardId>` |
+| add a comment to a card | `plnk comment create --card <cardId> --text <text>` |
+| list labels on a board | `plnk label list --board <boardId>` |
+| apply/remove label on card | `plnk card label add <cardId> <labelId>` / `plnk card label remove <cardId> <labelId>` |
+| list custom field groups on a card | `plnk field-group list --card <cardId>` |
+| define a reusable field template | `plnk field-group create --project <projectId> --name <name>` then `plnk field create --base-group <groupId> --name <name>` |
+| attach a template to a card | `plnk field-group create --card <cardId> --base <baseGroupId>` |
+| set/clear a custom field value | `plnk card field set <cardId> --group <id\|name> --field <id\|name> --value <text>` / `plnk card field clear <cardId> --group <id\|name> --field <id\|name>` |
+| read a card's custom field values | `plnk card field list <cardId>` |
+| list assignees on a card | `plnk card assignee list <cardId>` |
+| add/remove assignee | `plnk card assignee add <cardId> <userId>` / `plnk card assignee remove <cardId> <userId>` |
+| list/upload/download attachments | `plnk attachment list --card <cardId>` / `plnk attachment upload --card <cardId> <file>` / `plnk attachment download <attachmentId> --card <cardId>` |
+| inspect everything under a board/project/card | `plnk board snapshot <id> --output json`, `plnk project snapshot <id> --output json`, `plnk card snapshot <id> --output json` |
+
+## Common Resolution Playbooks
+
+### Resolve names to IDs before mutation
+
+Project by name:
+
+```bash
+plnk project find --name "Platform" --output json
+```
+
+Board by name inside a project:
+
+```bash
+plnk board find --project <projectId> --name "Sprint" --output json
+```
+
+List by name inside a board:
+
+```bash
+plnk list find --board <boardId> --name "In Progress" --output json
+```
+
+Card by title inside the narrowest available scope:
+
+```bash
+plnk card find --list <listId> --title "auth" --output json
+plnk card find --board <boardId> --title "auth" --output json
+plnk card find --project <projectId> --title "auth" --output json
+```
+
+Then mutate using returned IDs, not names.
+
+### Use snapshots when nested state matters
+
+Use snapshots when you need related resources in one read:
+
+- `project snapshot` for boards and memberships under a project
+- `board snapshot` for lists, cards, labels, and board memberships
+- `card snapshot` for tasks, comments, attachments, labels, assignees, and related nested state
+
+### Prefer narrow scopes for performance
+
+Use the narrowest scope that can answer the question:
+
+- `card find --list` is fastest
+- `card find --board` is broader
+- `card find --project` is widest and may require multiple board reads
+
+## Auth
+
+```bash
+plnk auth login [--server <url>] [--email <email>] [--password <pass>]
+plnk auth token set <token> [--server <url>]
+plnk auth whoami
+plnk auth status
+plnk auth logout
+```
+
+- `login` — Interactive by default. Prompts for missing values. Fully non-interactive when all flags provided.
+- `token set` — Write a pre-existing API key to config. If `--server` omitted, uses existing config server.
+- `whoami` — Validates token against server. Exit 3 if invalid.
+- `status` — Shows credential source (flags/env/config) and validity.
+- `logout` — Deletes config file. Does not revoke token server-side.
+
+## User
+
+```bash
+plnk user list
+plnk user get <userId>
+```
+
+Read-only. No create/update/delete.
+
+## Project
+
+```bash
+plnk project list
+plnk project get <projectId>
+plnk project snapshot <projectId>            # JSON only — full wire response
+plnk project find --name <name>
+plnk project create --name <name>
+plnk project update <projectId> --name <name>
+plnk project delete <projectId> [--yes]
+```
+
+- `update` requires at least one mutable field.
+- `delete` prompts for confirmation unless `--yes`.
+- `find` is unscoped for projects only — they are the root resource. All other `find` commands require a parent scope.
+- `snapshot` returns the full `GET /api/projects/{id}` response verbatim (item + all of included). Nothing is dropped, including fields and sub-resources we don't formally model. JSON only; table/markdown fail with exit code 2.
+
+## Board
+
+```bash
+plnk board list --project <projectId>
+plnk board get <boardId>
+plnk board snapshot <boardId>                # JSON only — full wire response
+plnk board find --project <projectId> --name <name>
+plnk board create --project <projectId> --name <name>
+plnk board update <boardId> --name <name>
+plnk board delete <boardId> [--yes]
+```
+
+Alias: `plnk boards --project <projectId>`
+
+- `find` uses three-tier matching: exact case-sensitive > case-insensitive > substring.
+- `list` and `find` return boards from the project snapshot.
+
+## List
+
+```bash
+plnk list list --board <boardId>
+plnk list get <listId>
+plnk list find --board <boardId> --name <name>
+plnk list create --board <boardId> --name <name>
+plnk list update <listId> [--name <name>] [--position <float>]
+plnk list move <listId> --to-position <float>
+plnk list delete <listId> [--yes]
+```
+
+Alias: `plnk lists --board <boardId>`
+
+- `list` returns only active lists (filters out archive lists with empty names).
+- Position values are typically powers of 2 starting at 65536.
+
+## Card
+
+```bash
+plnk card list --list <listId>
+plnk card get <cardId>
+plnk card snapshot <cardId>                  # JSON only — full wire response
+plnk card find --list <listId> --title <title>
+plnk card find --board <boardId> --title <title>
+plnk card find --project <projectId> --title <title>
+plnk card create --list <listId> --title <title> [--description <text>] [--position top|bottom|<int>]
+plnk card update <cardId> [--title <title>] [--description <text>]
+plnk card move <cardId> --to-list <listId> [--to-board <boardId>] [--position top|bottom|<int>]
+plnk card archive <cardId>
+plnk card unarchive <cardId>
+plnk card delete <cardId> [--yes]
+```
+
+Alias: `plnk cards --list <listId>`
+
+- `find` requires exactly one scope flag (`--list`, `--board`, or `--project`).
+- `find --board` fetches the board snapshot and searches all cards across lists.
+- `find --project` fetches all boards in the project, then all cards in each board.
+- `--description` accepts literal text, `-` for stdin, `@file.md` for file.
+- `--position top` = position 0.0, `bottom` = max float, or provide a numeric value.
+- `update` requires at least one mutable field.
+
+### Card Labels
+
+```bash
+plnk card label list <cardId>
+plnk card label add <cardId> <labelId>
+plnk card label remove <cardId> <labelId>
+```
+
+- Labels must exist on the board first (see Label section).
+- `list` returns card-label junction records from the card snapshot.
+
+### Card Assignees
+
+```bash
+plnk card assignee list <cardId>
+plnk card assignee add <cardId> <userId>
+plnk card assignee remove <cardId> <userId>
+```
+
+- `list` returns card-membership records from the card snapshot.
+
+## Task
+
+```bash
+plnk task list --card <cardId>
+plnk task create --card <cardId> --title <title>
+plnk task update <taskId> [--title <title>]
+plnk task complete <taskId>
+plnk task reopen <taskId>
+plnk task delete <taskId> [--yes]
+```
+
+Alias: `plnk tasks --card <cardId>`
+
+- `list` fetches tasks from the card snapshot's included data.
+- `create` automatically finds or creates a task list on the card.
+- There is no `task get` — Planka exposes no direct GET endpoint and the prior PATCH-with-empty-body workaround silently bumped `updatedAt`. Read via `task list --card` or `card snapshot <cardId>`.
+- `complete` sets `isCompleted: true`. `reopen` sets `isCompleted: false`.
+
+## Comment
+
+```bash
+plnk comment list --card <cardId>
+plnk comment create --card <cardId> --text <text>
+plnk comment update <commentId> --text <text>
+plnk comment delete <commentId> [--yes]
+```
+
+Alias: `plnk comments --card <cardId>`
+
+- `--text` accepts literal text, `-` for stdin, `@file.md` for file.
+- `list` uses `GET /api/cards/{cardId}/comments` and returns full comment text — no separate `get` exists (Planka has no direct GET endpoint and the PATCH workaround silently bumped `updatedAt`).
+
+## Label
+
+```bash
+plnk label list --board <boardId>
+plnk label find --board <boardId> --name <name>
+plnk label create --board <boardId> --name <name> --color <color>
+plnk label update <labelId> [--name <name>] [--color <color>]
+plnk label delete <labelId> [--yes]
+```
+
+Alias: `plnk labels --board <boardId>`
+
+- Labels are board-scoped. To apply a label to a card, use `plnk card label add`.
+- `list` fetches labels from the board snapshot's included data. There is no standalone `label get` — read via `label list --board` or `board snapshot <boardId>`.
+
+### Planka color tokens
+
+`berry-red`, `pumpkin-orange`, `light-mud`, `sunset-orange`, `rain-blue`, `lagoon-blue`, `sky-blue`, `midnight-blue`, `concrete-gray`, `bright-moss`, `dark-granite`, `pink-tulip`
+
+## Field Group
+
+```bash
+plnk field-group list --project <projectId>   # base groups (reusable templates)
+plnk field-group list --board <boardId>
+plnk field-group list --card <cardId>
+plnk field-group find --project <projectId> --name <name>
+plnk field-group get <groupId>
+plnk field-group create --project <projectId> --name <name>   # a template
+plnk field-group create --board <boardId> --name <name>
+plnk field-group create --card <cardId> --base <baseGroupId>  # adopt a template
+plnk field-group create --card <cardId> --name <name>         # one-off group
+plnk field-group update <groupId> --name <name>
+plnk field-group delete <groupId> [--yes]
+```
+
+Alias: `plnk field-groups --project|--board|--card <id>`
+
+- `--project`, `--board`, `--card` are mutually exclusive and one is required on `list`, `find` and `create`.
+- `--project` returns **base groups** (a different type with different columns than board/card groups). Do not expect one shape.
+- On `create --card`, exactly one of `--base` or `--name`. Neither exits `2`.
+- `get`, `update` and `delete` accept either kind of ID and fall back to the base-group route automatically.
+
+## Field
+
+```bash
+plnk field list --base-group <baseGroupId>
+plnk field list --group <groupId>
+plnk field find --base-group <baseGroupId> --name <name>
+plnk field create --base-group <baseGroupId> --name <name> [--show-on-front]
+plnk field create --group <groupId> --name <name>
+plnk field update <fieldId> [--name <name>] [--show-on-front true|false]
+plnk field delete <fieldId> [--yes]
+```
+
+Alias: `plnk fields --group|--base-group <id>`
+
+- `--group` and `--base-group` are mutually exclusive and one is required on `list`, `find` and `create`.
+- **Asking an adopted card group for its fields returns nothing.** Its fields belong to the base group — ask `--base-group <baseGroupId>` instead. This is not a bug.
+- `--show-on-front` makes the value visible on the card face in the Planka web UI. Off by default.
+
+## Card Field Values
+
+```bash
+plnk card field list <cardId>
+plnk card field set <cardId> --group <id|name> --field <id|name> --value <text>
+plnk card field clear <cardId> --group <id|name> --field <id|name>
+```
+
+- `--group` and `--field` accept an **ID or a name**, like `card label add`. Names resolve within the card's own groups and reach through to the base group. Use an ID to avoid ambiguity.
+- Ambiguous name → exit `2` naming every candidate. No match → exit `4`.
+- Values are capped at **512 characters**; over-length exits `2` with no request sent.
+- **Empty values are rejected** (exit `2`). There is no "set to empty" — use `card field clear`.
+- `clear` is **idempotent**: clearing an already-unset value exits `0`.
+- **There is no server-side filter by field value.** To filter, pull a snapshot and filter locally.
+
+## Attachment
+
+```bash
+plnk attachment list --card <cardId>
+plnk attachment upload --card <cardId> <file>
+plnk attachment download <attachmentId> --card <cardId> [--out <path>]
+plnk attachment delete <attachmentId> [--yes]
+```
+
+- `upload` sends a multipart form with the file, type, and name.
+- `download` fetches the card snapshot to find the attachment's real filename and download URL. Without `--out`, saves to the current directory using the original filename.
+- `list` fetches attachments from the card snapshot's included data.
+
+## Membership
+
+```bash
+plnk membership list --project <projectId>
+plnk membership list --board <boardId>
+plnk membership add --project <projectId> --user <userId>
+plnk membership add --board <boardId> --user <userId> [--role <role>]
+plnk membership remove --project <projectId> --user <userId>
+plnk membership remove --board <boardId> --user <userId>
+```
+
+- Exactly one of `--project` or `--board` must be provided.
+- Project memberships use project-managers endpoint. Board memberships use board-memberships endpoint.
+- `--role` is optional (e.g., `editor`, `viewer`).
+
+## Plural Aliases
+
+All aliases are hidden from `--help` and produce identical output to their canonical form.
+
+| Alias | Canonical |
+|-------|-----------|
+| `plnk boards --project <id>` | `plnk board list --project <id>` |
+| `plnk lists --board <id>` | `plnk list list --board <id>` |
+| `plnk cards --list <id>` | `plnk card list --list <id>` |
+| `plnk tasks --card <id>` | `plnk task list --card <id>` |
+| `plnk comments --card <id>` | `plnk comment list --card <id>` |
+| `plnk labels --board <id>` | `plnk label list --board <id>` |
+| `plnk field-groups --card <id>` | `plnk field-group list --card <id>` |
+| `plnk fields --base-group <id>` | `plnk field list --base-group <id>` |
+
+## Global Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--server <url>` | Planka server URL | env `PLANKA_SERVER` or config |
+| `--token <token>` | API token | env `PLANKA_TOKEN` or config |
+| `--output table\|json\|markdown` | Output format | `table` |
+| `-v` / `-vv` / `-vvv` | Verbosity (info/debug/trace) | warn only |
+| `--quiet` | Suppress all output | off |
+| `--no-color` | Disable colors | off |
+| `--yes` | Skip confirmation prompts | off |
+| `--full` | Show all fields | trimmed |
+
+## Machine-Readable Help
+
+Any command supports `--help --output json` for structured help:
+
+```bash
+plnk card create --help --output json
+plnk board --help --output json
+plnk --help --output json
+```
+
+Returns JSON with `resource`, `action`, `summary`, `args`, `options` (with type and required), and `examples`.

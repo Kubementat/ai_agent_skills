@@ -1,0 +1,218 @@
+# Multi-Environment Deployment Template
+# Usage: Adapt environments and deployment steps for your stack
+
+name: Deploy to Multiple Environments
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+  id-token: write  # For OIDC authentication if needed
+
+env:
+  APP_NAME: my-app
+
+jobs:
+  # Job 1: Build (runs once, artifacts reused)
+  build:
+    name: 🔨 Build Application
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-name: ${{ steps.artifact.outputs.name }}
+      
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: 📥 Install dependencies
+        run: npm ci
+      
+      - name: 🔢 Determine version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Built version: ${VERSION}"
+          
+      - name: 🔨 Build application
+        run: npm run build
+        
+      - name: 📦 Create artifact name
+        id: artifact
+        run: |
+          ARTIFACT_NAME="${{ env.APP_NAME }}-${{ steps.version.outputs.version }}"
+          echo "name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          
+      - name: 📤 Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: dist/
+          retention-days: 7
+
+  # Job 2: Deploy to Staging (automatic)
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    if: github.event_name == 'push' || 
+        (github.event_name == 'workflow_dispatch' && 
+         github.event.inputs.environment == 'staging')
+    
+    environment:
+      name: staging
+      url: https://staging.example.com
+      
+    steps:
+      - name: 📥 Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ./deploy/
+          
+      - name: 🔍 Debug deployment info
+        run: |
+          echo "Deploying version: ${{ needs.build.outputs.version }}"
+          echo "Target environment: staging"
+          ls -la ./deploy/
+          
+      - name: 🚀 Deploy to staging
+        env:
+          API_URL: ${{ secrets.STAGING_API_URL }}
+          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+        run: |
+          echo "Deploying to staging environment..."
+          # Replace with your actual deployment command
+          # Example: kubectl apply -f deploy/staging/
+          # Example: aws s3 sync ./deploy/ s3://staging-bucket/
+          ./scripts/deploy.sh staging
+
+  # Job 3: Deploy to Production (with approval gate)
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build, deploy-staging]
+    
+    environment:
+      name: production
+      url: https://example.com
+    
+    # Require staging deployment to succeed first  
+    if: success() && 
+        (github.event_name == 'workflow_dispatch' && 
+         github.event.inputs.environment == 'production')
+         
+    steps:
+      - name: 📥 Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ./deploy/
+          
+      - name: 🔍 Verify deployment package
+        run: |
+          echo "Version to deploy: ${{ needs.build.outputs.version }}"
+          ls -la ./deploy/
+          
+      - name: 🚀 Deploy to production  
+        env:
+          API_URL: ${{ secrets.PROD_API_URL }}
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          echo "Deploying version ${{ needs.build.outputs.version }} to production..."
+          # Replace with your actual deployment command
+          ./scripts/deploy.sh production
+
+  # Job 4: Smoke Tests (after production deploy)
+  smoke-test:
+    name: ✅ Production Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: deploy-production
+    
+    if: success()
+    
+    steps:
+      - name: 🌐 Verify staging endpoint
+        run: |
+          curl -f https://staging.example.com/health || exit 1
+          
+      - name: 🌐 Verify production endpoint
+        run: |
+          curl -f https://example.com/health || exit 1
+          
+      - name: 📊 Run synthetic checks
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+          PROD_URL: ${{ secrets.PROD_URL }}
+        run: |
+          ./scripts/smoke-tests.sh
+
+# Job 5: Rollback (manual trigger)
+  rollback:
+    name: ↩️ Rollback Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    if: github.event_name == 'workflow_dispatch' && 
+        contains(github.event.inputs.environment, 'rollback')
+        
+    environment:
+      name: production
+      
+    steps:
+      - name: 📥 Download previous artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ./deploy/
+          
+      - name: ↩️ Execute rollback
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          ./scripts/rollback.sh
+
+# Annotations
+# 
+# Key Features:
+# 1. Environment-based secrets management (GitHub Environments)
+# 2. Approval gates between staging → production  
+# 3. Artifact reuse across deployment jobs
+# 4. Smoke tests after successful deploy
+# 5. Manual rollback capability
+#
+# Setup Requirements:
+# 1. Create GitHub Environments: "staging" and "production"
+# 2. Add secrets to each environment (API_URL, DB_HOST, etc.)
+# 3. Configure deployment scripts (deploy.sh, smoke-tests.sh)
+# 4. Set up OIDC if using cloud providers (AWS GCP, Azure)
+#
+# Workflow Triggers:
+# - Automatic on push to main → staging only
+# - Manual dispatch for production with environment selection
+# - Optional rollback trigger via workflow_dispatch
