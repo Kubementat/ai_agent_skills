@@ -39,19 +39,19 @@ Activate when the user says:
 
 ## Relationship to Other Skills
 
-### Morning Ritual Integration
+### Captain's Log Integration (quest-system)
 
-The GTD Assistant provides **strategic, comprehensive analysis** of all open loops in your vault. For daily tactical planning (what to focus on TODAY), use the `morning-ritual` skill:
+The GTD Assistant provides **strategic, comprehensive analysis** of all open loops in your vault. For daily tactical planning (what to focus on TODAY), use the `quest-system` skill (Captain's Log briefing — goal-first, with calendar and task collection):
 
 ```bash
 # For deep dive: GTD assistant
 gtd review / help me understand my backlog / open loops sweep
 
-# For daily kickoff: morning ritual
-good morning / morning briefing / what to focus on today?
+# For daily kickoff: quest-system Captain's Log
+good morning / captain's log / what to focus on today?
 ```
 
-When the `morning-ritual` skill completes, it can offer:
+When the `quest-system` briefing completes, it can offer:
 - **"Deeper analysis?"** — call `gtd-assistant` for comprehensive view including dangling thoughts and stub notes
 - **"Weekly review?"** — recommend full GTD sweep instead of daily briefing
 
