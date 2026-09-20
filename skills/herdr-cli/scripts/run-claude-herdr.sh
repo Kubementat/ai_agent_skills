@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# run-pi-herdr.sh — Launch a pi agent inside a herdr terminal workspace.
+# run-claude-herdr.sh — Launch a Claude Code agent inside a herdr terminal workspace.
 #
 # Usage:
-#   run-pi-herdr.sh -m <model> -p "<prompt>" [options]
+#   run-claude-herdr.sh -m <model> -p "<prompt>" [options]
 #
 # Options:
 #   -m, --model <model>              Model to use (required)
+#                                    e.g. sonnet, opus, haiku, or full name like claude-sonnet-4-5
 #   -p, --prompt <prompt>            Task prompt for the agent (required)
-#   -sp, --system-prompt <text>      Replace pi's system prompt entirely
-#   -asp, --append-system-prompt <txt> Append to system prompt (repeatable, or use @file)
+#   -sp, --system-prompt <text>      Replace the system prompt (use @file for file contents)
+#   -asp, --append-system-prompt <txt> Append to system prompt (repeatable; use @file for file contents)
+#   --agent <name>                   Use a predefined custom agent for the session
+#   --agents <json>                  JSON object defining custom agents inline
+#   --permission-mode <mode>         Permission mode (default, acceptEdits, plan, bypassPermissions)
+#   --yolo                           Bypass all permission checks (--dangerously-skip-permissions)
 #   -w, --timeout <ms>               Wait timeout in milliseconds (default: 120000)
 #   -n, --name <name>                Agent name (default: auto-generated)
 #   -c, --cwd <path>                 Working directory for the workspace (default: current dir)
@@ -18,11 +23,12 @@
 #   -h, --help                       Show this help message
 #
 # Example:
-#   run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -p "Explain the code in src/main.ts"
-#   run-pi-herdr.sh --model "anthropic/claude-sonnet-4" --prompt "Write a hello world" --timeout 180000
-#   run-pi-herdr.sh -m "qwen3.6-35b" -p "Refactor auth module" -c /path/to/project --no-keep
-#   run-pi-herdr.sh -m "claude-sonnet-4" -p "Code review" --system-prompt "You are a security auditor"
-#   run-pi-herdr.sh -m "gpt-4o" -p "Build a REST API" --append-system-prompt "Always add tests" --append-system-prompt @extra-rules.md
+#   run-claude-herdr.sh -m "sonnet" -p "Explain the code in src/main.ts"
+#   run-claude-herdr.sh --model "opus" --prompt "Write a hello world" --timeout 180000
+#   run-claude-herdr.sh -m "sonnet" -p "Refactor auth module" -c /path/to/project --no-keep
+#   run-claude-herdr.sh -m "sonnet" -p "Code review" --system-prompt "You are a security auditor"
+#   run-claude-herdr.sh -m "sonnet" -p "Build a REST API" --agent reviewer --append-system-prompt "Always add tests"
+#   run-claude-herdr.sh -m "haiku" -p "Run tests" --yolo
 
 set -euo pipefail
 
@@ -31,6 +37,10 @@ MODEL=""
 PROMPT=""
 SYSTEM_PROMPT=""
 APPEND_SYSTEM_PROMPTS=()
+CLAUDE_AGENT=""
+CLAUDE_AGENTS_JSON=""
+PERMISSION_MODE=""
+YOLO=false
 TIMEOUT=120000
 AGENT_NAME=""
 CWD=""
@@ -42,18 +52,21 @@ UNIQUE_SUFFIX="$(printf '%04d' $((RANDOM % 10000)))"  # 4-digit unique suffix fo
 # ── Usage ──────────────────────────────────────────────────────────────────
 usage() {
     cat <<'EOF'
-Usage: run-pi-herdr.sh -m <model> -p "<prompt>" [options]
+Usage: run-claude-herdr.sh -m <model> -p "<prompt>" [options]
 
-Launch a pi coding agent inside a herdr terminal workspace, submit a task,
+Launch a Claude Code agent inside a herdr terminal workspace, submit a task,
 wait for completion, and print the output.
 
 Options:
   -m, --model <model>              Model to use (required)
-                                    Examples: evo/ornith-1.0-35b-Q6, anthropic/claude-sonnet-4,
-                                              qwen3.6-35b, openai/gpt-4o
+                                    Examples: sonnet, opus, haiku, claude-sonnet-4-5
   -p, --prompt <prompt>            Task prompt for the agent (required)
-  -sp, --system-prompt <text>      Replace pi's entire system prompt
+  -sp, --system-prompt <text>      Replace the system prompt (use @file for file contents)
   -asp, --append-system-prompt <txt> Append to system prompt (repeatable; use @file for file contents)
+      --agent <name>               Use a predefined custom agent for the session
+      --agents <json>              JSON object defining custom agents inline
+      --permission-mode <mode>     Permission mode (default, acceptEdits, plan, bypassPermissions)
+      --yolo                       Bypass all permission checks (dangerous; for sandboxes only)
   -w, --timeout <ms>               Wait timeout in milliseconds (default: 120000)
   -n, --name <name>                Agent name (default: auto-generated from model)
   -c, --cwd <path>                 Working directory for the workspace (default: current dir)
@@ -64,31 +77,31 @@ Options:
 
 Examples:
   # Simple task with a specific model
-  run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -p "say hello"
+  run-claude-herdr.sh -m "sonnet" -p "say hello"
 
   # Task with custom timeout and working directory
-  run-pi-herdr.sh -m "anthropic/claude-sonnet-4" \
+  run-claude-herdr.sh -m "opus" \
       -p "Refactor the auth module" \
       -c /path/to/project \
       -w 180000
 
   # Close workspace after completion (default is kept open)
-  run-pi-herdr.sh -m "qwen3.6-35b" -p "List all .ts files" --no-keep
+  run-claude-herdr.sh -m "haiku" -p "List all .ts files" --no-keep
 
   # Custom agent name (workspace kept open by default)
-  run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -n "my-coder" -p "Build a REST API"
+  run-claude-herdr.sh -m "sonnet" -n "my-coder" -p "Build a REST API"
 
-  # Replace system prompt entirely
-  run-pi-herdr.sh -m "claude-sonnet-4" -p "Code review" \
-      --system-prompt "You are a senior security auditor focused on finding vulnerabilities."
+  # Use a predefined custom agent and append instructions
+  run-claude-herdr.sh -m "sonnet" -p "Review the diff" \
+      --agent reviewer \
+      --append-system-prompt "Always cite line numbers"
 
-  # Append extra instructions (repeatable, supports @file syntax)
-  run-pi-herdr.sh -m "gpt-4o" -p "Build a REST API" \
-      --append-system-prompt "Always write tests alongside code" \
-      --append-system-prompt "@coding-standards.md"
+  # Define inline subagents and select one
+  run-claude-herdr.sh -m "sonnet" -p "Refactor, then have the reviewer check it" \
+      --agents '{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}'
 
-  # Fire-and-forget: start agent, submit task, exit immediately
-  run-pi-herdr.sh -m "qwen3.6-35b" -p "Run the full test suite" --no-wait
+  # Bypass permission prompts (sandbox only)
+  run-claude-herdr.sh -m "haiku" -p "Run the test suite" --yolo --no-wait
 EOF
 }
 
@@ -108,6 +121,14 @@ while [[ $# -gt 0 ]]; do
             SYSTEM_PROMPT="$2"; shift 2 ;;
         -asp|--append-system-prompt)
             APPEND_SYSTEM_PROMPTS+=("$2"); shift 2 ;;
+        --agent)
+            CLAUDE_AGENT="$2"; shift 2 ;;
+        --agents)
+            CLAUDE_AGENTS_JSON="$2"; shift 2 ;;
+        --permission-mode)
+            PERMISSION_MODE="$2"; shift 2 ;;
+        --yolo)
+            YOLO=true; shift ;;
         -w|--timeout)
             TIMEOUT="$2"; shift 2 ;;
         -n|--name)
@@ -140,25 +161,38 @@ if [[ -z "$PROMPT" ]]; then
     exit 1
 fi
 
+# ── Expand @file references in prompt-like arguments ─────────────────────
+expand_file_ref() {
+    local arg="$1"
+    if [[ "$arg" == @* ]]; then
+        local f="${arg#@}"
+        if [[ ! -f "$f" ]]; then
+            echo "ERROR: File not found for @file reference: $f" >&2
+            exit 1
+        fi
+        cat "$f"
+    else
+        printf '%s' "$arg"
+    fi
+}
+
 # ── Defaults from model ───────────────────────────────────────────────────
-MODEL_SHORT="${MODEL##*/}"  # strip provider prefix
-# Sanitize agent name: lowercase, replace dots with underscores, truncate to 28 chars
-# (leaves room for "pi-" prefix = 32 char max)
+MODEL_SHORT="${MODEL##*/}"
 SAFE_MODEL="${MODEL_SHORT//./_}"
-SAFE_MODEL="${SAFE_MODEL,,}"  # lowercase
+SAFE_MODEL="${SAFE_MODEL,,}"
 SAFE_MODEL="${SAFE_MODEL:0:28}"
 if [[ -z "$AGENT_NAME" ]]; then
-    AGENT_NAME="pi-${SAFE_MODEL}-${UNIQUE_SUFFIX}"
+    AGENT_NAME="cc-${SAFE_MODEL}-${UNIQUE_SUFFIX}"
 fi
 if [[ -z "$LABEL" ]]; then
-    LABEL="pi-${MODEL_SHORT}-${UNIQUE_SUFFIX}"
+    LABEL="claude-${MODEL_SHORT}-${UNIQUE_SUFFIX}"
 fi
 if [[ -z "$CWD" ]]; then
     CWD="$(pwd)"
 fi
 
 # ── Remove stale agent with same base name ────────────────────────────────
-BASE_AGENT="pi-${SAFE_MODEL}"
+BASE_AGENT="cc-${SAFE_MODEL}"
 STALE=$(herdr agent list 2>/dev/null | jq -r --arg base "$BASE_AGENT-" '.result.agents[] | select((.name // "") | startswith($base)) | .name' | head -1)
 if [[ -n "$STALE" ]]; then
     echo "Removing stale agent: $STALE"
@@ -189,20 +223,36 @@ echo "  Tab ID: $TAB"
 PANE=$(herdr pane list --workspace "$WS" | jq -r '.result.panes[0].pane_id')
 echo "  Pane ID: $PANE"
 
-# ── Build pi CLI arguments ────────────────────────────────────────────────
-PI_ARGS=("--model" "$MODEL")
+# ── Build claude CLI arguments ────────────────────────────────────────────
+CLAUDE_ARGS=("--model" "$MODEL")
 
 if [[ -n "$SYSTEM_PROMPT" ]]; then
-    PI_ARGS+=("--system-prompt" "$SYSTEM_PROMPT")
+    CLAUDE_ARGS+=("--system-prompt" "$(expand_file_ref "$SYSTEM_PROMPT")")
 fi
 
 for extra in "${APPEND_SYSTEM_PROMPTS[@]+"${APPEND_SYSTEM_PROMPTS[@]}"}"; do
-    PI_ARGS+=("--append-system-prompt" "$extra")
+    CLAUDE_ARGS+=("--append-system-prompt" "$(expand_file_ref "$extra")")
 done
 
-# ── Start pi agent ───────────────────────────────────────────────────────
-echo "Starting pi agent: $AGENT_NAME (model: $MODEL)"
-herdr agent start "$AGENT_NAME" --kind pi --pane "$PANE" -- "${PI_ARGS[@]}"
+if [[ -n "$CLAUDE_AGENT" ]]; then
+    CLAUDE_ARGS+=("--agent" "$CLAUDE_AGENT")
+fi
+
+if [[ -n "$CLAUDE_AGENTS_JSON" ]]; then
+    CLAUDE_ARGS+=("--agents" "$CLAUDE_AGENTS_JSON")
+fi
+
+if [[ -n "$PERMISSION_MODE" ]]; then
+    CLAUDE_ARGS+=("--permission-mode" "$PERMISSION_MODE")
+fi
+
+if [[ "$YOLO" == true ]]; then
+    CLAUDE_ARGS+=("--dangerously-skip-permissions")
+fi
+
+# ── Start claude agent ───────────────────────────────────────────────────
+echo "Starting claude agent: $AGENT_NAME (model: $MODEL)"
+herdr agent start "$AGENT_NAME" --kind claude --pane "$PANE" -- "${CLAUDE_ARGS[@]}"
 # Verify agent started
 AGENT_STATUS=$(herdr agent list | jq -r ".result.agents[] | select(.name == \"$AGENT_NAME\") | .agent_status")
 if [[ -z "$AGENT_STATUS" ]]; then

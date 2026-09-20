@@ -10,7 +10,7 @@ herdr is a terminal workspace manager that hosts and orchestrates AI coding agen
 
 ## Primary Workflow — Launching and Using an Agent
 
-__ATTENTION: The main usage scenario is implemented in `scripts/run-pi-herdr.sh`. Use the script preferably!__
+__ATTENTION: The main usage scenario is implemented in helper scripts: `scripts/run-pi-herdr.sh` (pi), `scripts/run-claude-herdr.sh` (Claude Code), and `scripts/run-opencode-herdr.sh` (opencode). Use a script preferably!__
 
 ### Manual Workflow
 1. **Ensure the server is running**: `herdr status`. If not, start with `herdr server`.
@@ -22,11 +22,64 @@ __ATTENTION: The main usage scenario is implemented in `scripts/run-pi-herdr.sh`
 
 The workflow is complete when `--wait` returns. Verify with `herdr agent list`.
 
-## Helper Script: `run-pi-herdr.sh`
+## Helper Scripts
 
-A convenience script ships with this skill at `scripts/run-pi-herdr.sh`. It wraps the full primary workflow (server check → workspace → tab → pane → agent start → prompt → wait → read output) into a single command. Use it when you want to fire off a quick task without chaining 6+ CLI calls.
+Convenience scripts ship with this skill. Each wraps the full primary workflow (server check → workspace → tab → pane → agent start → prompt → wait → read output) into a single command. Use them when you want to fire off a quick task without chaining 6+ CLI calls.
 
-### Usage
+| Script | Agent kind | Model format |
+|--------|-----------|--------------|
+| `scripts/run-pi-herdr.sh` | `pi` | `provider/model` (e.g. `evo/ornith-1.0-35b-Q6`, `anthropic/claude-sonnet-4`) |
+| `scripts/pipeline-herdr.sh` | multi-stage | per-stage `--<stage>-kind` / `--<stage>-model` (see Pipeline below) |
+| `scripts/run-claude-herdr.sh` | `claude` | Alias or full name (e.g. `sonnet`, `opus`, `haiku`, `claude-sonnet-4-5`) |
+| `scripts/run-opencode-herdr.sh` | `opencode` | `provider/model` (e.g. `anthropic/claude-sonnet-4-5`, `google/gemini-2.5-pro`) |
+
+All three share the same workflow options: `-p/--prompt`, `-w/--timeout` (default 120000), `-n/--name`, `-c/--cwd`, `-l/--label`, `-nk/--no-keep`, `-nw/--no-wait`, `-h/--help`.
+
+### `run-claude-herdr.sh` (Claude Code)
+
+Agent-specific options:
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model <model>` | Model (required), e.g. `sonnet`, `opus`, `haiku` |
+| `-sp, --system-prompt <text>` | Replace the system prompt (`@file` supported) |
+| `-asp, --append-system-prompt <txt>` | Append to system prompt (repeatable, `@file` supported) |
+| `--agent <name>` | Use a predefined custom agent |
+| `--agents <json>` | Define custom agents inline (JSON) |
+| `--permission-mode <mode>` | `default`, `acceptEdits`, `plan`, `bypassPermissions` |
+| `--yolo` | Bypass all permission checks (`--dangerously-skip-permissions`; sandboxes only) |
+
+```bash
+# Claude Code task with a predefined subagent
+scripts/run-claude-herdr.sh -m "sonnet" -p "Review the diff" --agent reviewer
+
+# Inline subagents + permission mode, custom cwd
+scripts/run-claude-herdr.sh -m "opus" -p "Refactor auth, then review it" \
+    --agents '{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}' \
+    --permission-mode acceptEdits -c /path/to/project
+```
+
+### `run-opencode-herdr.sh` (opencode)
+
+Agent-specific options:
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model <provider/model>` | Model (required), e.g. `anthropic/claude-sonnet-4-5` |
+| `--agent <name>` | Predefined opencode agent (see `opencode agent list`) |
+| `--auto` | Auto-approve permissions not explicitly denied (dangerous!) |
+
+```bash
+# opencode task with a predefined subagent
+scripts/run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Review the diff" --agent reviewer
+
+# Model + auto-approve, close workspace when done
+scripts/run-opencode-herdr.sh -m "google/gemini-2.5-pro" -p "Run the tests" --auto --no-keep
+```
+
+### `run-pi-herdr.sh`
+
+#### Usage
 
 ```bash
 scripts/run-pi-herdr.sh -m <model> -p "<prompt>" [options]
@@ -76,6 +129,41 @@ scripts/run-pi-herdr.sh -m "gpt-4o" -p "Build a REST API" \
 # Fire-and-forget: start agent, submit task, exit immediately
 scripts/run-pi-herdr.sh -m "qwen3.6-35b" -p "Run the full test suite" --no-wait
 ```
+
+### `pipeline-herdr.sh` (Research → Plan → Implement → Review)
+
+Deterministic multi-stage pipeline: one herdr workspace, one tab + agent per stage, strictly sequential. Stages hand work forward via files in `<repo>/.agent-work/` (never via prompt text). Each stage has a mechanical gate; a failed stage is re-run **once** with the failure gate + transcript tail appended to the prompt.
+
+```bash
+# Default model routing: plan on strong model, research/implement on local
+scripts/pipeline-herdr.sh /path/to/repo "Add retry with backoff to the API client"
+
+# Override any stage's agent kind + model
+scripts/pipeline-herdr.sh /path/to/repo "Refactor config loader" \
+    --research-model opus \
+    --implement-model anthropic/claude-sonnet-4-5 \
+    --review-kind claude --review-model opus
+
+# Resume after a failure (skips earlier stages whose gates already pass)
+scripts/pipeline-herdr.sh /path/to/repo --from-stage implement
+```
+
+**Defaults:** research `pi`/`dgx/qwen3.6-35b-mtp`, plan `claude`/`opus`, implement `pi`/`dgx/qwen3.6-35b-mtp`, review `pi`/`dgx/qwen3.8-27b`. Timeouts: 1h per stage, 3h for implement.
+
+**Stage prompts** are static files in `prompts/{research,plan,implement,review}.md` next to the skill — edit them there to change stage behavior. Each prompt defines the artifact contract:
+
+| Stage | Artifact | Gate |
+|-------|----------|------|
+| research | `.agent-work/research.md` | exists, non-empty |
+| plan | `.agent-work/plan.md` | exists, non-empty |
+| implement | `.agent-work/results.md` | ends with `RESULTS: all-pass` |
+| review | `.agent-work/review.md` | ends with `STATUS: clean` or `STATUS: open:<n>` |
+
+The review stage re-runs all test commands itself (it does not trust `results.md`), fixes what it can, and reports open issues.
+
+**Options:** `--<stage>-kind`, `--<stage>-model`, `--<stage>-timeout <ms>` per stage; `--from-stage <research|plan|implement|review>` (resume), `--fresh` (don't skip already-passing stages), `--close` (close workspace on success). Workspace is kept open on failure — inspect `<stage>.transcript.md` and `pipeline.log` in `.agent-work/`.
+
+**Exit codes:** `0` clean · `10` research failed · `11` plan failed · `12` implement failed · `13` review failed (no STATUS line) · `14` finished with open issues (`STATUS: open:<n>`).
 
 ### When to Use the Script vs Manual CLI
 
@@ -592,3 +680,6 @@ herdr --no-session
 11. **Workspace ID parsing** — when capturing workspace_id from JSON output, prefer `herdr workspace get <label>` over fragile grep patterns.
 12. **`herdr --help` reveals all available subcommands** — it's the most comprehensive discovery command.
 13. **`--until <state>` alone is broken on `agent prompt`** — both `--until done` and `--until idle` time out even when the agent completes. Workarounds: (a) Use `--wait` alone (matches `idle|done|blocked` automatically), (b) Use multiple `--until`: `--wait --until done --until idle`, or (c) Submit without `--wait`, then use `herdr agent wait "name" --until done` separately. Agents transition to `done` (not `idle`) after completing tasks, so `--until idle` will never match a completed agent.
+14. **Model formats differ by agent kind** — pi and opencode take `provider/model` (e.g. `anthropic/claude-sonnet-4-5`); claude takes aliases (`sonnet`, `opus`, `haiku`) or full model names. The helper scripts pass `-m` straight through to each agent binary.
+15. **claude/opencode must be installed and authenticated** — check `which claude` / `which opencode` (install: `npm install -g @anthropic-ai/claude-code`); authenticate with `claude login` / `opencode auth login`. Without auth the TUI sits on a login prompt and the script blocks until timeout.
+16. **`herdr integration install claude` / `herdr integration install opencode`** add lifecycle state hooks for better status tracking (see `herdr integration status`).

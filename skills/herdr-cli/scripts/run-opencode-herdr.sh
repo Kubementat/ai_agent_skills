@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# run-pi-herdr.sh — Launch a pi agent inside a herdr terminal workspace.
+# run-opencode-herdr.sh — Launch an opencode agent inside a herdr terminal workspace.
 #
 # Usage:
-#   run-pi-herdr.sh -m <model> -p "<prompt>" [options]
+#   run-opencode-herdr.sh -m <provider/model> -p "<prompt>" [options]
 #
 # Options:
-#   -m, --model <model>              Model to use (required)
+#   -m, --model <provider/model>     Model to use (required), e.g. anthropic/claude-sonnet-4-5
 #   -p, --prompt <prompt>            Task prompt for the agent (required)
-#   -sp, --system-prompt <text>      Replace pi's system prompt entirely
-#   -asp, --append-system-prompt <txt> Append to system prompt (repeatable, or use @file)
+#   --agent <name>                   Predefined opencode agent to use (subagent orchestration)
+#   --auto                           Auto-approve permissions not explicitly denied (dangerous!)
 #   -w, --timeout <ms>               Wait timeout in milliseconds (default: 120000)
 #   -n, --name <name>                Agent name (default: auto-generated)
 #   -c, --cwd <path>                 Working directory for the workspace (default: current dir)
@@ -18,19 +18,18 @@
 #   -h, --help                       Show this help message
 #
 # Example:
-#   run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -p "Explain the code in src/main.ts"
-#   run-pi-herdr.sh --model "anthropic/claude-sonnet-4" --prompt "Write a hello world" --timeout 180000
-#   run-pi-herdr.sh -m "qwen3.6-35b" -p "Refactor auth module" -c /path/to/project --no-keep
-#   run-pi-herdr.sh -m "claude-sonnet-4" -p "Code review" --system-prompt "You are a security auditor"
-#   run-pi-herdr.sh -m "gpt-4o" -p "Build a REST API" --append-system-prompt "Always add tests" --append-system-prompt @extra-rules.md
+#   run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Explain the code in src/main.ts"
+#   run-opencode-herdr.sh --model "google/gemini-2.5-pro" --prompt "Write a hello world" --timeout 180000
+#   run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Refactor auth module" -c /path/to/project --no-keep
+#   run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Code review" --agent reviewer --auto
 
 set -euo pipefail
 
 # ── Defaults ───────────────────────────────────────────────────────────────
 MODEL=""
 PROMPT=""
-SYSTEM_PROMPT=""
-APPEND_SYSTEM_PROMPTS=()
+OPENCODE_AGENT=""
+AUTO=false
 TIMEOUT=120000
 AGENT_NAME=""
 CWD=""
@@ -42,18 +41,18 @@ UNIQUE_SUFFIX="$(printf '%04d' $((RANDOM % 10000)))"  # 4-digit unique suffix fo
 # ── Usage ──────────────────────────────────────────────────────────────────
 usage() {
     cat <<'EOF'
-Usage: run-pi-herdr.sh -m <model> -p "<prompt>" [options]
+Usage: run-opencode-herdr.sh -m <provider/model> -p "<prompt>" [options]
 
-Launch a pi coding agent inside a herdr terminal workspace, submit a task,
+Launch an opencode agent inside a herdr terminal workspace, submit a task,
 wait for completion, and print the output.
 
 Options:
-  -m, --model <model>              Model to use (required)
-                                    Examples: evo/ornith-1.0-35b-Q6, anthropic/claude-sonnet-4,
-                                              qwen3.6-35b, openai/gpt-4o
+  -m, --model <provider/model>     Model to use (required)
+                                    Examples: anthropic/claude-sonnet-4-5, google/gemini-2.5-pro,
+                                              openai/gpt-4o
   -p, --prompt <prompt>            Task prompt for the agent (required)
-  -sp, --system-prompt <text>      Replace pi's entire system prompt
-  -asp, --append-system-prompt <txt> Append to system prompt (repeatable; use @file for file contents)
+      --agent <name>               Predefined opencode agent to use (see `opencode agent list`)
+      --auto                       Auto-approve permissions not explicitly denied (dangerous!)
   -w, --timeout <ms>               Wait timeout in milliseconds (default: 120000)
   -n, --name <name>                Agent name (default: auto-generated from model)
   -c, --cwd <path>                 Working directory for the workspace (default: current dir)
@@ -64,31 +63,25 @@ Options:
 
 Examples:
   # Simple task with a specific model
-  run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -p "say hello"
+  run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "say hello"
 
   # Task with custom timeout and working directory
-  run-pi-herdr.sh -m "anthropic/claude-sonnet-4" \
+  run-opencode-herdr.sh -m "google/gemini-2.5-pro" \
       -p "Refactor the auth module" \
       -c /path/to/project \
       -w 180000
 
   # Close workspace after completion (default is kept open)
-  run-pi-herdr.sh -m "qwen3.6-35b" -p "List all .ts files" --no-keep
+  run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "List all .ts files" --no-keep
 
   # Custom agent name (workspace kept open by default)
-  run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -n "my-coder" -p "Build a REST API"
+  run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -n "my-coder" -p "Build a REST API"
 
-  # Replace system prompt entirely
-  run-pi-herdr.sh -m "claude-sonnet-4" -p "Code review" \
-      --system-prompt "You are a senior security auditor focused on finding vulnerabilities."
-
-  # Append extra instructions (repeatable, supports @file syntax)
-  run-pi-herdr.sh -m "gpt-4o" -p "Build a REST API" \
-      --append-system-prompt "Always write tests alongside code" \
-      --append-system-prompt "@coding-standards.md"
+  # Use a predefined opencode agent (subagent) with auto-approve
+  run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Review the diff" --agent reviewer --auto
 
   # Fire-and-forget: start agent, submit task, exit immediately
-  run-pi-herdr.sh -m "qwen3.6-35b" -p "Run the full test suite" --no-wait
+  run-opencode-herdr.sh -m "openai/gpt-4o" -p "Run the full test suite" --no-wait
 EOF
 }
 
@@ -104,10 +97,10 @@ while [[ $# -gt 0 ]]; do
             MODEL="$2"; shift 2 ;;
         -p|--prompt)
             PROMPT="$2"; shift 2 ;;
-        -sp|--system-prompt)
-            SYSTEM_PROMPT="$2"; shift 2 ;;
-        -asp|--append-system-prompt)
-            APPEND_SYSTEM_PROMPTS+=("$2"); shift 2 ;;
+        --agent)
+            OPENCODE_AGENT="$2"; shift 2 ;;
+        --auto)
+            AUTO=true; shift ;;
         -w|--timeout)
             TIMEOUT="$2"; shift 2 ;;
         -n|--name)
@@ -141,24 +134,22 @@ if [[ -z "$PROMPT" ]]; then
 fi
 
 # ── Defaults from model ───────────────────────────────────────────────────
-MODEL_SHORT="${MODEL##*/}"  # strip provider prefix
-# Sanitize agent name: lowercase, replace dots with underscores, truncate to 28 chars
-# (leaves room for "pi-" prefix = 32 char max)
+MODEL_SHORT="${MODEL##*/}"
 SAFE_MODEL="${MODEL_SHORT//./_}"
-SAFE_MODEL="${SAFE_MODEL,,}"  # lowercase
+SAFE_MODEL="${SAFE_MODEL,,}"
 SAFE_MODEL="${SAFE_MODEL:0:28}"
 if [[ -z "$AGENT_NAME" ]]; then
-    AGENT_NAME="pi-${SAFE_MODEL}-${UNIQUE_SUFFIX}"
+    AGENT_NAME="oc-${SAFE_MODEL}-${UNIQUE_SUFFIX}"
 fi
 if [[ -z "$LABEL" ]]; then
-    LABEL="pi-${MODEL_SHORT}-${UNIQUE_SUFFIX}"
+    LABEL="opencode-${MODEL_SHORT}-${UNIQUE_SUFFIX}"
 fi
 if [[ -z "$CWD" ]]; then
     CWD="$(pwd)"
 fi
 
 # ── Remove stale agent with same base name ────────────────────────────────
-BASE_AGENT="pi-${SAFE_MODEL}"
+BASE_AGENT="oc-${SAFE_MODEL}"
 STALE=$(herdr agent list 2>/dev/null | jq -r --arg base "$BASE_AGENT-" '.result.agents[] | select((.name // "") | startswith($base)) | .name' | head -1)
 if [[ -n "$STALE" ]]; then
     echo "Removing stale agent: $STALE"
@@ -189,20 +180,20 @@ echo "  Tab ID: $TAB"
 PANE=$(herdr pane list --workspace "$WS" | jq -r '.result.panes[0].pane_id')
 echo "  Pane ID: $PANE"
 
-# ── Build pi CLI arguments ────────────────────────────────────────────────
-PI_ARGS=("--model" "$MODEL")
+# ── Build opencode CLI arguments ──────────────────────────────────────────
+OC_ARGS=("--model" "$MODEL")
 
-if [[ -n "$SYSTEM_PROMPT" ]]; then
-    PI_ARGS+=("--system-prompt" "$SYSTEM_PROMPT")
+if [[ -n "$OPENCODE_AGENT" ]]; then
+    OC_ARGS+=("--agent" "$OPENCODE_AGENT")
 fi
 
-for extra in "${APPEND_SYSTEM_PROMPTS[@]+"${APPEND_SYSTEM_PROMPTS[@]}"}"; do
-    PI_ARGS+=("--append-system-prompt" "$extra")
-done
+if [[ "$AUTO" == true ]]; then
+    OC_ARGS+=("--auto")
+fi
 
-# ── Start pi agent ───────────────────────────────────────────────────────
-echo "Starting pi agent: $AGENT_NAME (model: $MODEL)"
-herdr agent start "$AGENT_NAME" --kind pi --pane "$PANE" -- "${PI_ARGS[@]}"
+# ── Start opencode agent ─────────────────────────────────────────────────
+echo "Starting opencode agent: $AGENT_NAME (model: $MODEL)"
+herdr agent start "$AGENT_NAME" --kind opencode --pane "$PANE" -- "${OC_ARGS[@]}"
 # Verify agent started
 AGENT_STATUS=$(herdr agent list | jq -r ".result.agents[] | select(.name == \"$AGENT_NAME\") | .agent_status")
 if [[ -z "$AGENT_STATUS" ]]; then
