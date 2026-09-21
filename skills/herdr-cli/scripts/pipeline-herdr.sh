@@ -58,6 +58,7 @@ set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROMPTS_DIR="$SKILL_DIR/prompts"
+source "$SKILL_DIR/scripts/herdr-common.sh"  # shared helpers (herdr_claude_trust)
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 RESEARCH_KIND="pi";       RESEARCH_MODEL="dgx/qwen3.6-35b-mtp";  RESEARCH_TIMEOUT=3600000
@@ -159,17 +160,38 @@ gate_review()    { grep -Eq '^STATUS: (clean|open:[0-9]+)$' "$WORK/review.md" 2>
 # run_stage <name> <kind> <model> <prompt_file> <timeout_ms> <gate_fn> <gate_desc>
 run_stage() {
     local name="$1" kind="$2" model="$3" prompt_file="$4" timeout="$5" gate="$6" gate_desc="$7"
-    local tab pane prompt text attempt
+    local pane prompt text attempt
+    # Claude Code blocks a fresh TUI on a one-time workspace trust dialog;
+    # pre-accept it so the stage prompt is never injected into the dialog.
+    if [[ "$kind" == "claude" ]]; then
+        herdr_claude_trust "$REPO"
+    fi
 
     echo ""
     echo "=== STAGE: $name ($kind / $model) ==="
-    tab="$(herdr tab create --workspace "$WS" --label "$name" | jq -r '.result.tab.tab_id')"
+    herdr tab create --workspace "$WS" --label "$name" >/dev/null
     pane="$(herdr pane list --workspace "$WS" | jq -r '.result.panes[-1].pane_id')"
     if [[ -z "$pane" || "$pane" == "null" ]]; then
         echo "[pipeline] $name: failed to find pane for new tab" >&2
         return 1
     fi
-    herdr agent start "$name" --kind "$kind" --pane "$pane" --timeout 60000 -- --model "$model"
+    # The new pane's shell may still be initializing; herdr rejects the start
+    # with agent_pane_busy but still exits 0, so verify via agent list and
+    # retry until the agent actually exists.
+    local ok=false i
+    for i in $(seq 1 15); do
+        herdr agent start "$name" --kind "$kind" --pane "$pane" --timeout 60000 -- --model "$model" || true
+        if herdr agent list | jq -e --arg n "$name" '.result.agents[] | select(.name == $n)' >/dev/null 2>&1; then
+            ok=true
+            break
+        fi
+        echo "[pipeline] $name: agent not up yet, retrying start ($i/15)"
+        sleep 2
+    done
+    if [[ "$ok" != true ]]; then
+        echo "[pipeline] $name: failed to start agent in pane $pane" >&2
+        return 1
+    fi
     sleep 3
 
     prompt="$(cat "$prompt_file")"
@@ -253,6 +275,6 @@ if grep -q '^STATUS: open:' "$WORK/review.md" 2>/dev/null; then
     exit 14
 fi
 
-notify "Pipeline clean" "Workspace $WS_LABEL" done
+notify "Pipeline clean" "Workspace $WS_LABEL" "done"
 [[ "$CLOSE_WS" == "true" ]] && herdr workspace close "$WS" 2>/dev/null || true
 exit 0
