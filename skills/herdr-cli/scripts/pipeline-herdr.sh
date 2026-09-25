@@ -4,7 +4,7 @@
 # Runs four sequential agent stages, each in its own tab of one herdr workspace.
 # Stages hand work forward via files in <repo>/.agent-work/. A strong model
 # (default: claude/opus) does the planning; a cheap/local model does the
-# token-heavy research and implementation (default: pi/dgx/qwen3.6-35b-mtp);
+# token-heavy research i(pi/dgx/qwen3.6-35b-mtp) and implementation (default: pi/dgx/qwen3.8-27b);
 # review defaults to pi/dgx/qwen3.8-27b.
 #
 # Usage:
@@ -21,7 +21,7 @@
 #   --plan-model <model>      (default: opus)
 #   --plan-timeout <ms>       (default: 3600000)
 #   --implement-kind <kind>   (default: pi)
-#   --implement-model <model> (default: dgx/qwen3.6-35b-mtp)
+#   --implement-model <model> (default: dgx/qwen3.8-27b)
 #   --implement-timeout <ms>  (default: 10800000)
 #   --review-kind <kind>      (default: pi)
 #   --review-model <model>    (default: dgx/qwen3.8-27b)
@@ -63,7 +63,7 @@ source "$SKILL_DIR/scripts/herdr-common.sh"  # shared helpers (herdr_claude_trus
 # ── Defaults ─────────────────────────────────────────────────────────────────
 RESEARCH_KIND="pi";       RESEARCH_MODEL="dgx/qwen3.6-35b-mtp";  RESEARCH_TIMEOUT=3600000
 PLAN_KIND="claude";       PLAN_MODEL="opus";                     PLAN_TIMEOUT=3600000
-IMPL_KIND="pi";           IMPL_MODEL="dgx/qwen3.6-35b-mtp";      IMPL_TIMEOUT=10800000
+IMPL_KIND="pi";           IMPL_MODEL="dgx/qwen3.8-27b";      IMPL_TIMEOUT=10800000
 REVIEW_KIND="pi";         REVIEW_MODEL="dgx/qwen3.8-27b";        REVIEW_TIMEOUT=3600000
 START_STAGE="research"
 FRESH=false
