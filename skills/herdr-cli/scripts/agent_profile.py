@@ -372,15 +372,30 @@ def resolve_mcp(names):
     return {"mcpServers": filtered}, "filtered"
 
 
+def _mcp_direct_servers():
+    """Server names with directTools: true in the global mcp-adapter.json.
+    Those register per-tool names (mcp__server__tool); all other servers are
+    reached through the single 'mcp' proxy tool, so allowlisting must name 'mcp'."""
+    try:
+        full = json.loads(MCP_ADAPTER_JSON.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return {n for n, c in full.get("mcpServers", {}).items()
+            if isinstance(c, dict) and c.get("directTools")}
+
+
 def translate_tools(tools):
-    """Translate profile tools list to pi's --tools string. mcp:server/tool → mcp__server__tool.
-    Returns None for absent/[all] (no --tools flag)."""
+    """Translate profile tools list to pi's --tools string.
+    mcp:server/tool → mcp__server__tool for directTools servers, → mcp (the
+    single proxy tool) for gateway-style servers. Returns None for absent/[all]
+    (no --tools flag)."""
     if tools is None or tools == "all" or tools == ["all"]:
         return None
     if isinstance(tools, list):
         items = [str(t).strip() for t in tools if str(t).strip()]
     else:
         items = [t.strip() for t in str(tools).split(",") if t.strip()]
+    direct = _mcp_direct_servers()
     out = []
     for t in items:
         if t.startswith("mcp:"):
@@ -388,8 +403,13 @@ def translate_tools(tools):
             server, _, tool = rest.partition("/")
             if not server or not tool:
                 raise ProfileError(f"malformed mcp tool reference: {t!r} (want mcp:server/tool)")
-            norm = lambda s: re.sub(r"[-.]", "_", s)
-            out.append(f"mcp__{norm(server)}__{norm(tool)}")
+            if server in direct:
+                norm = lambda s: re.sub(r"[-.]", "_", s)
+                name = f"mcp__{norm(server)}__{norm(tool)}"
+            else:
+                name = "mcp"
+            if name not in out:
+                out.append(name)
         else:
             out.append(t)
     return ",".join(out)

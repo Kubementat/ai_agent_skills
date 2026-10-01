@@ -3,7 +3,7 @@ name: web-researcher
 description: Conduct thorough web research, verify information across multiple sources, and produce detailed research reports with citations.
 harness: pi
 model: dgx/qwen3.8-27b
-tools: read, write, edit, bash, fetch, mcp:brave-search/brave_web_search
+tools: read, write, edit, bash, mcp:brave-search/brave_web_search
 skills: []
 extensions: [pi-mcp-adapter, pi-web-access]
 mcp: [brave-search]
@@ -142,8 +142,8 @@ When information is unclear:
 - Search for "[topic] + recent developments" for current info
 - Limit to 5-7 searches per research task before synthesizing
 
-### fetch Usage
-- Use to extract full content from promising search results
+### Content Extraction
+- Extract full content from promising search results via the search tool's page content
 - Prioritize fetching from high-credibility domains
 - Extract quotes and specific data points for citations
 - Check page dates and author credentials when available

@@ -1,0 +1,1 @@
+/home/verfeinerer/.pi/agent/agents/full.md

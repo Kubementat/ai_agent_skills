@@ -36,7 +36,7 @@ favor of this; the agent files remain the single source of truth.
 | 9 | Harness | v1: `harness: pi` only. `--harness` exists, errors for others ("only pi supported in v1") |
 | 10 | Sandbox posture | ON by default for every profile. `sandbox: off` = only opt-out. Writable dir defaults to cwd. Single writable dir (asb v1 limit — TODO in vault). Filesystem-only isolation in v1 (no network egress control). |
 | 11 | MCP | Fail-closed allowlist. Filtered temp config generated from `~/.pi/agent/mcp-adapter.json` (server `env` blocks travel with the server). Absent `mcp:` = explicit empty config. `mcp: [all]` = use global config (omit `--mcp-config`). |
-| 12 | Tools | Existing `tools:` key, incl. `mcp:server/tool` syntax → translated to pi's `mcp__server__tool` naming for `--tools`. |
+| 12 | Tools | Existing `tools:` key, incl. `mcp:server/tool` syntax → translated for `--tools`: `mcp__server__tool` for `directTools: true` servers, `mcp` (the single proxy tool) for gateway-style servers (per global mcp-adapter.json). |
 | 13 | Extensions | Fail-closed allowlist (same pattern as skills). Absent = `--no-extensions` with nothing; `[all]` = auto-discovery. No hardcoded infra list in v1 (watch item §9). |
 | 14 | Agent-session interface | `runagent` must be callable from inside an agent session: non-tty ⇒ one-shot only, clean pipeable stdout, stable exit codes. |
 | 15 | Workspace lifecycle | Label `ra-<agent>-<4-digit-suffix>`. No auto-GC in v1. `--keep` default; finish prints close/attach hints. |
@@ -73,8 +73,10 @@ Rules:
   pi-subagents already ignores most of them).
 - `name` must match the filename stem (warn on mismatch).
 - `tools:` — comma-separated. Built-in names pass through; `mcp:server/tool`
-  entries are translated to `mcp__<server>__<tool>` (dashes/dots → underscores)
-  for pi's `--tools` flag.
+  entries are translated for pi's `--tools` flag: `mcp__<server>__<tool>`
+  (dashes/dots → underscores) when the server has `directTools: true` in the
+  global mcp-adapter.json, otherwise `mcp` (the single proxy tool through
+  which gateway-style servers are reached). Duplicates collapsed.
 - `skills:` — names resolved in priority order:
   1. `.pi/skills/` (project, relative to cwd)
   2. `~/.pi/agent/skills/`
