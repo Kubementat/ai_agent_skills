@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# runagent — launch a named agent profile (system prompt + skills + tools +
+# extensions + MCP + sandbox policy) as a sandboxed subagent via herdr.
+#
+# Profiles: ~/.pi/agent/agents/<name>.md
+# Docs: SKILL.md section "Named agent profiles (runagent)".
+#
+# Stdout contract (agent-session safe): progress → stderr, final agent output
+# → stdout (prefixed with "=== Agent Output ==="). Non-tty never attaches.
+#
+# Exit codes: 0 ok, 2 usage, 10 launch failure, 11 wait timeout,
+#             12 profile resolution failure, 13 herdr server unavailable.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROFILE_PY="$SCRIPT_DIR/agent_profile.py"
+DEFAULT_TIMEOUT=120000
+AGENT=""
+PROMPT=""
+PROMPT_SET=false
+MODEL=""
+WORKSPACE=""
+CWD=""
+HARNESS=""
+TIMEOUT=$DEFAULT_TIMEOUT
+WAIT=true
+KEEP=true
+EXPLAIN=false
+ENV_ARGS=()
+RA_DIR=""
+
+usage() {
+    cat <<'USAGE'
+Usage: runagent <agent_name> [options]
+       runagent --list
+
+Launch a named agent profile as a sandboxed subagent (herdr workspace + asb).
+
+  -p, --prompt <text|@file|->   Task prompt (@file = read file, - = stdin).
+                                With prompt → one-shot. Without → interactive (tty only).
+  -m, --model <model>           Override profile model (provider/model)
+  -w, --workspace <dir>         Override sandbox writable dir
+  -c, --cwd <dir>               Working dir (default: $PWD)
+  --harness <kind>              Override harness (v1: pi only)
+  --env K=V                     Extra env var into sandbox (repeatable)
+  --timeout <ms>                Wait timeout (default: 120000)
+  --no-wait                     Fire-and-forget (submit prompt, don't wait)
+  --keep / --no-keep            Keep herdr workspace (default: keep)
+  --explain                     Print composed command, ask Proceed? [y/N]
+  -h, --help                    Show this help
+
+Profiles live in ~/.pi/agent/agents/<name>.md. Exit codes:
+  0 ok (incl. --explain declined)  2 usage  10 launch failure  11 wait timeout
+  12 profile resolution failure    13 herdr server unavailable
+USAGE
+}
+
+die() { echo "runagent: $*" >&2; exit "${2:-2}"; }
+
+cleanup() {
+    # Remove the .runagent/ dir (system prompt + filtered MCP config) from the
+    # workspace. Best-effort: the workspace may already be closed.
+    [[ -n "$RA_DIR" && -d "$RA_DIR" ]] && rm -rf "$RA_DIR" 2>/dev/null
+}
+trap cleanup EXIT
+
+# ── Arg parsing ───────────────────────────────────────────────────────────
+if [[ $# -eq 0 ]]; then usage; exit 2; fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list)
+            exec python3 "$PROFILE_PY" list
+            ;;
+        -h|--help) usage; exit 0 ;;
+        -p|--prompt)  PROMPT="${2:?missing value for $1}"; PROMPT_SET=true; shift 2 ;;
+        -m|--model)   MODEL="${2:?missing value for $1}"; shift 2 ;;
+        -w|--workspace) WORKSPACE="${2:?missing value for $1}"; shift 2 ;;
+        -c|--cwd)     CWD="${2:?missing value for $1}"; shift 2 ;;
+        --harness)    HARNESS="${2:?missing value for $1}"; shift 2 ;;
+        --env)        ENV_ARGS+=("${2:?missing value for $1}"); shift 2 ;;
+        --timeout)    TIMEOUT="${2:?missing value for $1}"; shift 2 ;;
+        --no-wait)    WAIT=false; shift ;;
+        --keep)       KEEP=true; shift ;;
+        --no-keep)    KEEP=false; shift ;;
+        --explain)    EXPLAIN=true; shift ;;
+        -*)           die "unknown option: $1 (see --help)" ;;
+        *)
+            if [[ -n "$AGENT" ]]; then die "unexpected extra argument: $1"; fi
+            AGENT="$1"; shift ;;
+    esac
+done
+
+[[ -n "$AGENT" ]] || { usage >&2; exit 2; }
+[[ -f "$PROFILE_PY" ]] || die "profile parser not found: $PROFILE_PY"
+
+if [[ -n "$HARNESS" && "$HARNESS" != "pi" ]]; then
+    die "harness '$HARNESS' not supported (only pi supported in v1)"
+fi
+
+# Bad/unknown agent name → exit 2 (spec T13). Exit 12 is reserved for
+# skill/extension/mcp resolution failures inside the composer.
+[[ -f "$HOME/.pi/agent/agents/$AGENT.md" ]] || die "unknown agent profile: $AGENT (see 'runagent --list')"
+
+# --timeout must be a positive integer (ms)
+[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "--timeout must be an integer number of ms (got: $TIMEOUT)"
+
+# Prompt source: text | @file | stdin
+if [[ "$PROMPT_SET" == true ]]; then
+    if [[ "$PROMPT" == "-" ]]; then
+        PROMPT="$(cat)"
+    elif [[ "$PROMPT" == @* ]]; then
+        local_f="${PROMPT#@}"
+        [[ -f "$local_f" ]] || die "file not found for @file reference: $local_f"
+        PROMPT="$(cat "$local_f")"
+    fi
+fi
+
+if [[ -z "$PROMPT" && "$EXPLAIN" != true && ( ! -t 0 || ! -t 1 ) ]]; then
+    die "prompt required in non-interactive mode (no tty)"
+fi
+
+# ── Compose (python parser; exit 12 on profile resolution failure) ────────
+COMPOSE_ARGS=(compose "$AGENT" --cwd "${CWD:-$PWD}")
+[[ -n "$MODEL" ]] && COMPOSE_ARGS+=(--model "$MODEL")
+[[ -n "$WORKSPACE" ]] && COMPOSE_ARGS+=(--workspace "$WORKSPACE")
+for ev in "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}"; do COMPOSE_ARGS+=(--env "$ev"); done
+
+COMPOSED="$(python3 "$PROFILE_PY" "${COMPOSE_ARGS[@]}")" || exit 12
+COMMAND_STRING="$(printf '%s' "$COMPOSED" | jq -r '.command_string')"
+WS_ID="$(printf '%s' "$COMPOSED" | jq -r '.workspace')"
+PROF_MODEL="$(printf '%s' "$COMPOSED" | jq -r '.model')"
+PROF_SANDBOX="$(printf '%s' "$COMPOSED" | jq -r '.sandbox')"
+RA_DIR="$(printf '%s' "$COMPOSED" | jq -r '.ra_dir // empty')"
+
+progress() { echo "runagent: $*" >&2; }
+
+# ── --explain ─────────────────────────────────────────────────────────────
+if [[ "$EXPLAIN" == true ]]; then
+    echo "=== Composed launch for profile '$AGENT' ==="
+    echo "  model:      $PROF_MODEL"
+    echo "  sandbox:    $PROF_SANDBOX"
+    echo "  cwd:        ${CWD:-$PWD}"
+    echo "  workspace:  $WS_ID"
+    if [[ -n "$RA_DIR" ]]; then
+        echo "  prompt/mcp dir: $RA_DIR (side effect: sysprompt.md + mcp.json are written"
+        echo "                  there NOW, before you decide; removed by the EXIT trap)"
+    fi
+    echo "  command:"
+    printf '    %s\n' "$COMMAND_STRING"
+    if [[ ! -t 0 ]]; then
+        echo "  (non-tty: not launching; run in a tty to proceed)"
+        exit 0
+    fi
+    read -r -p "Proceed? [y/N] " ans
+    case "$ans" in
+        y|Y|yes|YES) ;;
+        *) echo "Aborted (no launch)." >&2; exit 0 ;;
+    esac
+fi
+
+# ── Launch sequence (herdr) ───────────────────────────────────────────────
+herdr_ensure_server() {
+    if ! herdr status >/dev/null 2>&1; then
+        progress "herdr server not running; starting..."
+        nohup herdr server > /tmp/herdr-server.log 2>&1 &
+        sleep 2
+        if ! herdr status >/dev/null 2>&1; then
+            echo "runagent: ERROR: herdr server failed to start. Check /tmp/herdr-server.log" >&2
+            exit 13
+        fi
+    fi
+}
+herdr_ensure_server
+
+SUFFIX="$(printf '%04d' $((RANDOM % 10000)))"
+LABEL="ra-${AGENT}-${SUFFIX}"
+RUN_CWD="${CWD:-$PWD}"
+
+progress "Creating workspace $LABEL (cwd: $RUN_CWD)..."
+WS="$(herdr workspace create --label "$LABEL" --cwd "$RUN_CWD" 2>/dev/null | jq -r '.result.workspace.workspace_id')"
+[[ -n "$WS" && "$WS" != "null" ]] || { echo "runagent: ERROR: workspace creation failed" >&2; exit 10; }
+progress "  Workspace ID: $WS"
+
+PANE="$(herdr pane list --workspace "$WS" 2>/dev/null | jq -r '.result.panes[0].pane_id')"
+[[ -n "$PANE" && "$PANE" != "null" ]] || { herdr workspace close "$WS" >/dev/null 2>&1; echo "runagent: ERROR: no pane in workspace" >&2; exit 10; }
+progress "  Pane ID: $PANE"
+
+# Run the composed command (asb pi ...) in the pane. `herdr pane run` takes
+# the command as separate argv words; COMMAND_STRING is shlex.join'd (POSIX
+# quoted) by the composer, so eval re-parses it back into exact words.
+# shellcheck disable=SC2086
+progress "Launching: ${COMMAND_STRING:0:100}..."
+PANE_RUN_OUT="$(eval "herdr pane run \"$PANE\" $COMMAND_STRING" 2>&1)"
+PANE_RUN_RC=$?
+[[ -n "$PANE_RUN_OUT" ]] && printf '%s\n' "$PANE_RUN_OUT" >&2
+if [[ $PANE_RUN_RC -ne 0 ]]; then
+    herdr workspace close "$WS" >/dev/null 2>&1
+    echo "runagent: ERROR: pane run failed (rc=$PANE_RUN_RC)" >&2
+    exit 10
+fi
+
+# Poll agent list for an entry with pane_id == PANE (≤30s)
+progress "Waiting for agent registration (≤30s)..."
+AGENT_FOUND=""
+for _ in $(seq 1 30); do
+    AGENT_FOUND="$(herdr agent list 2>/dev/null | jq -r --arg pane "$PANE" '.result.agents[] | select(.pane_id == $pane) | .agent_status' | head -1)"
+    [[ -n "$AGENT_FOUND" ]] && break
+    sleep 1
+done
+if [[ -z "$AGENT_FOUND" ]]; then
+    herdr workspace close "$WS" >/dev/null 2>&1
+    echo "runagent: ERROR: agent never registered in pane $PANE (launch failure)" >&2
+    exit 10
+fi
+
+# Wait for idle (≤30s)
+for _ in $(seq 1 30); do
+    [[ "$AGENT_FOUND" == "idle" ]] && break
+    sleep 1
+    AGENT_FOUND="$(herdr agent list 2>/dev/null | jq -r --arg pane "$PANE" '.result.agents[] | select(.pane_id == $pane) | .agent_status' | head -1)"
+done
+if [[ "$AGENT_FOUND" != "idle" ]]; then
+    echo "runagent: WARNING: agent did not reach idle (status: ${AGENT_FOUND})" >&2
+fi
+
+# Wait for the model to finish loading. agent_status reaches 'idle' within a
+# couple seconds of launch, LONG before the model is loaded — submitting a
+# prompt during model load types text into the terminal that pi mangles into a
+# spurious first turn. The reliable ready signal is the pi status bar (context-%
+# like '0.0%/262k'), which only renders once the model is loaded and the input
+# is active; 'loading model' text is present while it is not.
+wait_for_ready() {
+    # Require the ready state (context-% status bar present, no 'loading model')
+    # to hold across two consecutive polls, then settle, so a transient
+    # screen-read glitch cannot fire the prompt while the model is still loading.
+    local pane="$1" deadline=180 i scr bar load stable=0
+    for ((i = 0; i < deadline; i += 3)); do
+        scr="$(herdr pane read "$pane" --lines 50 2>/dev/null)"
+        bar=$(printf '%s' "$scr" | grep -cE '[0-9.]+%/')
+        load=$(printf '%s' "$scr" | grep -c 'loading model')
+        if [[ "$bar" -gt 0 && "$load" -eq 0 ]]; then
+            stable=$((stable + 1))
+            if [[ "$stable" -ge 2 ]]; then
+                sleep 2   # settle: let pi's input field fully stabilize
+                return 0
+            fi
+        else
+            stable=0
+        fi
+        sleep 3
+    done
+    echo "runagent: WARNING: model did not signal ready within ${deadline}s; submitting anyway." >&2
+    return 0
+}
+progress "Waiting for model to load..."
+wait_for_ready "$PANE"
+
+# ── Prompt ────────────────────────────────────────────────────────────────
+if [[ -z "$PROMPT" ]]; then
+    # interactive: attach the TUI (tty only, guaranteed above)
+    progress "Attaching interactive session (Ctrl-C / 'detach' to leave; workspace: $WS)..."
+    herdr agent attach "$PANE"
+    RC=$?
+    echo "" >&2
+    if [[ "$KEEP" != true ]]; then
+        progress "Closing workspace $WS..."
+        herdr workspace close "$WS" >/dev/null 2>&1
+    else
+        echo "Workspace kept (ID: $WS). Close: herdr workspace close $WS / Attach: herdr agent attach $PANE" >&2
+    fi
+    exit $RC
+fi
+
+if [[ "$WAIT" == true ]]; then
+    progress "Submitting prompt (timeout: ${TIMEOUT}ms)..."
+    PROMPT_OUT="$(herdr agent prompt "$PANE" "$PROMPT" --wait --timeout "$TIMEOUT" 2>&1)"
+    PROMPT_RC=$?
+    [[ -n "$PROMPT_OUT" ]] && printf '%s\n' "$PROMPT_OUT" >&2
+    if [[ $PROMPT_RC -ne 0 ]]; then
+        herdr workspace close "$WS" >/dev/null 2>&1
+        echo "runagent: ERROR: prompt timed out or failed (timeout: ${TIMEOUT}ms)" >&2
+        exit 11
+    fi
+    echo "=== Agent Output ==="
+    herdr agent read "$PANE" --source recent --lines 200
+    RC=$?
+else
+    progress "Submitting prompt (fire-and-forget)..."
+    NO_WAIT_OUT="$(herdr agent prompt "$PANE" "$PROMPT" 2>&1)"
+    [[ -n "$NO_WAIT_OUT" ]] && printf '%s\n' "$NO_WAIT_OUT" >&2
+    RC=0
+fi
+
+# ── Finish ────────────────────────────────────────────────────────────────
+if [[ "$KEEP" != true ]]; then
+    progress "Closing workspace $WS..."
+    herdr workspace close "$WS" >/dev/null 2>&1
+else
+    echo "Workspace kept (ID: $WS). Close: herdr workspace close $WS / Attach: herdr agent attach $PANE" >&2
+fi
+exit $RC

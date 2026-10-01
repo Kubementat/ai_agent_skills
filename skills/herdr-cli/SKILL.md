@@ -119,6 +119,67 @@ workspace on success). On failure the workspace is kept open — inspect
 **Exit codes:** `0` clean · `10` research · `11` plan · `12` implement · `13` review produced no
 STATUS line · `14` finished with open issues.
 
+## Named agent profiles (runagent)
+
+`scripts/runagent` (also `~/.local/bin/runagent`) launches **named agent roles** as sandboxed
+subagents. A profile is a pi agent file at `~/.pi/agent/agents/<name>.md` (YAML frontmatter +
+system-prompt body) that pins the full surface: model, tools, skills, extensions, MCP servers,
+sandbox policy.
+
+**When to use:**
+- **Named role** (a defined agent like `web-researcher` or `full` with its system prompt and
+  allowlists) → `runagent <name>`. This is the default path for role launches; the pi-native
+  `subagent` tool path is deprecated in favor of it.
+- **Ad-hoc, model-only** launch with no profile → the raw `run-*-herdr.sh` scripts (they remain
+  for profile-less launches).
+
+```bash
+runagent --list                                # table of all profiles
+runagent web-researcher --explain              # audit the composed command (asks y/N)
+runagent web-researcher -p "Research X"        # one-shot (sandboxed); prints agent output
+runagent web-researcher                        # interactive (attaches TUI; tty only)
+runagent web-researcher -m evo/qwen3.6-35b -w /tmp/scratch -p "..."   # overrides
+```
+
+Key options: `-p` (text | `@file` | `-` stdin), `-m` model override, `-w` workspace (sandbox
+writable dir), `-c` cwd, `--env K=V`, `--timeout <ms>`, `--no-wait`, `--keep`/`--no-keep`,
+`--explain`. Stdout contract: progress → stderr; final agent output → stdout prefixed by
+`=== Agent Output ===` (pipeable from agent sessions; non-tty never attaches and requires `-p`).
+
+**Profile format** (`~/.pi/agent/agents/<name>.md` frontmatter; unknown keys are ignored):
+
+| Key | Meaning |
+|-----|---------|
+| `harness` | v1: only `pi` |
+| `model` | default `provider/model`; `-m` overrides (model override is never policy-blocked) |
+| `tools` | comma-separated allowlist; `mcp:server/tool` entries translate to pi's `mcp__server__tool`; **absent = all tools** (no `--tools` flag) |
+| `skills` | **fail-closed allowlist**: absent = no skills; `[all]` = auto-discovery; explicit names resolved (project `.pi/skills`, `~/.pi/agent/skills`, `~/.agents/skills`, npm packages); unknown name = hard fail (exit 12) |
+| `extensions` | **fail-closed allowlist**, same pattern; resolved against `settings.json` packages (npm + local), dirs resolved to entry files |
+| `mcp` | **fail-closed allowlist**: absent = explicit empty MCP config; `[all]` = global config; listed servers must exist in `mcp-adapter.json` (their inline `env` blocks travel with the server) |
+| `sandbox` | `on` (default) / `off`, or mapping with `workspace:` (pinned writable dir) and `env:` (extra `--env` forwarding). asb sandbox: single writable dir = workspace, system dirs ro, env cleared |
+
+Body = the agent's system prompt (applied via pi `--append-system-prompt` from a temp copy in
+`<workspace>/.runagent/`, removed on exit — host `/tmp` is a private tmpfs inside asb and not
+visible in-sandbox).
+
+**`--explain` is the audit step**: it prints the exact composed launch (model, sandbox, cwd,
+workspace, full `asb pi ...` command) and asks `Proceed? [y/N]`. Use it to verify the
+tool/skill/extension/MCP surface before any real launch; declining exits 0 with no launch.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | success (incl. `--explain` declined) |
+| 2 | usage error (bad agent name, bad flag/timeout, non-tty without `-p`) |
+| 10 | launch failure (agent never registered / pane run failed) |
+| 11 | wait timeout |
+| 12 | profile resolution failure (unknown skill / extension / mcp server) |
+| 13 | herdr server unavailable |
+
+Workspaces are labeled `ra-<agent>-<suffix>` and **kept** by default (close hint printed);
+`--no-keep` closes them on finish. No auto-GC in v1.
+
 ## Architecture
 
 > For details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
