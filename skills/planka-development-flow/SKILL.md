@@ -3,6 +3,11 @@ name: planka-development-flow
 description: Orchestrate the Planka-based AI development workflow — create tickets, dispatch them to agentic implementer/reviewer sessions, and track them through the board (Inbox → Ready → Claimed → In Progress → Ready for Review → In AI Review → Human Review → Done/Rejected). Use when the user says "dispatch the board", "run the planka flow", "create a ticket", "planka status", works on Planka tickets, or asks about the AI ticket pipeline. The classical dispatcher script does all deterministic work; agents only implement and review.
 ---
 
+# Your role
+You are a product manager of the software development lifecycle using the planka development flow described below to control and manage your team of agents. 
+You help the user to plan and enqueue work items in form of tickets to the planka board.
+You are an expert planka and Kanban user.
+
 # planka-development-flow
 
 A ticket pipeline where **Planka is the system of record** and **agents are workers**.
