@@ -19,7 +19,12 @@ never trusted; the card state plus independent checks are.
    (`scripts/prompts/implementer.txt`, placeholders substituted). Up to
    `MAX_PARALLEL` agents run concurrently.
 5. **Wait** — poll `plnk card get` every `POLL_INTERVAL` seconds until the card
-   leaves `In Progress` (or `CARD_TIMEOUT`).
+   leaves `In Progress` (or `CARD_TIMEOUT`). If the agent **ends its turn
+   without moving the card** (agent idle, see lesson 8), the dispatcher
+   *rescues*: after a 120s grace period it reads the transcript and completes
+   the move from deterministic evidence — `STATUS: FAILED` marker → Ready;
+   ≥1 commit on the branch → Ready for Review (gates still apply); otherwise →
+   Ready (failure).
 6. **Gates** (see below).
 7. **Report check** — if no new comment appeared, auto-capture the agent's
    final transcript (`herdr agent read <agent> --source recent`) and post it
@@ -57,7 +62,10 @@ Same claim/launch/wait machinery on `Ready for Review` cards:
 3. report check (auto-capture the verdict if the comment is missing)
 4. `Human Review` (APPROVE) or `Ready` (CHANGES REQUESTED — no attempts bump;
    the review bounce is expected iteration, distinct from gate bounces)
-5. review timeout → card returns to `Ready for Review` (not a failure)
+5. idle rescue as in implementation, using the `VERDICT:` line of the
+   reviewer's final message; if the agent is idle but no verdict line is
+   found, no move is made and the normal timeout applies
+6. review timeout → card returns to `Ready for Review` (not a failure)
 
 ## Phase: cleanup
 

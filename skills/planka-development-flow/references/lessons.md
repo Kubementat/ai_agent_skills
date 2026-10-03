@@ -4,7 +4,7 @@ These findings shaped the architecture. Keep them in mind when extending.
 
 ## 1. Agents do not reliably post report comments (4/4 failures)
 
-The 35B local model (`dgx/qwen3.6-35b-mtp`) followed "move the card" but dropped
+A 35B local model followed "move the card" but dropped
 the "post a comment first" step in **every** run, implementer and reviewer alike.
 Fix: the pipeline owns reporting. `dispatch.sh` checks the comment count after
 each agent run and auto-captures the agent's final transcript from herdr
@@ -13,10 +13,10 @@ each agent run and auto-captures the agent's final transcript from herdr
 
 ## 2. Never branch worktrees from repo HEAD
 
-The test repo sat on a feature branch (`gitlab-integration`, 11 commits ahead of
-`main`). Branching from HEAD contaminated the ticket branch with unrelated
-commits; the AI reviewer correctly flagged "13 commits, 28 files for a
-/version endpoint". Fix: per-repo `base_ref` in config, always.
+The test repo sat on a feature branch well ahead of main. Branching from HEAD
+contaminated the ticket branch with unrelated commits; the AI reviewer
+correctly flagged an implausibly large diff for a tiny ticket. Fix: per-repo
+`base_ref` in config, always.
 
 ## 3. The AI review stage earns its keep
 
@@ -56,3 +56,16 @@ Gates run in the dispatcher, not the agent: the dispatcher re-runs the test
 command itself (the agent's "all tests pass" claim is input, not evidence),
 re-counts commits, and diffs the branch itself. This is what makes the
 classical/agentic split safe.
+
+## 8. Agents can drop the card move itself (2026-10-03, reviewer)
+
+Lesson 1 assumed the card move was the one reliable agent action. It is not
+always: a reviewer produced a complete, correct APPROVE report and then ended
+its turn without running `plnk card move`. Without a rescue the card sat in
+`In AI Review` until the full `CARD_TIMEOUT` (1 h) before bouncing back for a
+re-review. Fix: the dispatcher polls the herdr agent status alongside the
+card; when the agent is idle (turn ended) but the card hasn't moved, it reads
+the transcript and completes the move from deterministic evidence (`VERDICT:`
+line for reviews, `STATUS:` marker / commit count for implementations). The
+gates remain the authority — the rescue only supplies the move.
+**Rule: never make the pipeline wait on an agent that has stopped.

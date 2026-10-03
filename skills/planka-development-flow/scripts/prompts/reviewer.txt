@@ -15,7 +15,7 @@ Steps:
 
 Rules:
 - You are read-only for code: do NOT modify, commit, or push anything.
-- Do NOT post comments on the card — the pipeline captures your final message automatically. Make your FINAL MESSAGE the review report, structured exactly as:
+- Do NOT post comments on the card — the pipeline captures your final message automatically. Make your FINAL MESSAGE the review report, starting with the verdict line (the dispatcher parses it):
   VERDICT: APPROVE   (or)   VERDICT: CHANGES REQUESTED
   then sections: Test results (your own run) / Acceptance criteria (each met or not met) / Constraint check (each ok or violated + files) / Quality notes / Issues (numbered; only for CHANGES REQUESTED — be specific enough that a re-implementer can act on them without asking questions).
   Keep it under 30 lines.

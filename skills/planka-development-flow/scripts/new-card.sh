@@ -4,7 +4,7 @@
 # (adopt the Dispatch field group, set the project field).
 #
 # Usage:
-#   new-card.sh --title "Add /foo endpoint" --project ai-proxy-king \
+#   new-card.sh --title "Add /foo endpoint" --project my-app \
 #               --desc /path/to/description.md [--list inbox|ready]
 #
 # The description should follow the card format contract (see
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG=${PLANKA_DISPATCH_CONFIG:-"$HOME/.config/planka-dispatch/config.env"}
+CONFIG=${PLANKA_DEVFLOW_CONFIG:-"$HOME/.config/planka-development-flow/config.env"}
 [ -f "$CONFIG" ] || { echo "ERROR: config not found: $CONFIG" >&2; exit 2; }
 # shellcheck disable=SC1090
 source "$CONFIG"

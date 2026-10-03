@@ -12,6 +12,7 @@ Rules:
 - The ticket's Constraints section is ABSOLUTE. Touching a forbidden file is a failure. When an idea would require touching a forbidden file, do not do it — mention it as a suggestion in your final message instead.
 - Do not do work beyond the acceptance criteria and any reviewer-requested fixes (no bonus features, no unrelated refactors).
 - Do NOT post comments on the card — the pipeline captures your final message automatically. Make your FINAL MESSAGE a proper report: what you changed, files touched, test results, branch and commit.
+- Your FINAL MESSAGE must start with `STATUS: DONE` (card moved to Ready for Review) or `STATUS: FAILED` (card moved back to Ready). The dispatcher parses this marker.
 - If you cannot finish the ticket: move it back to Ready (plnk card move __CARD__ --to-list __LIST_READY__) and explain why in your final message.
 - Do not push anywhere. Do not touch files outside the worktree.
 - The plnk CLI is configured and ready to use.

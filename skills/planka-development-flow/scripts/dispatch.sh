@@ -18,19 +18,57 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_DIR="$SCRIPT_DIR/prompts"
-CONFIG=${PLANKA_DISPATCH_CONFIG:-"$HOME/.config/planka-dispatch/config.env"}
-LOCKFILE="${TMPDIR:-/tmp}/planka-dispatch.lock"
+CONFIG=${PLANKA_DEVFLOW_CONFIG:-"$HOME/.config/planka-development-flow/config.env"}
+LOCKFILE="${TMPDIR:-/tmp}/planka-devflow.lock"
 
 [ -f "$CONFIG" ] || { echo "ERROR: config not found: $CONFIG" >&2; exit 2; }
 # shellcheck disable=SC1090
 source "$CONFIG"
+
+# --- config validation: refuse to run with unfilled placeholders -------------
+# Models: MODEL is the default for both roles; MODEL_IMPL / MODEL_REVIEW
+# override it per role. At least one of the pair must resolve for each role.
+MODEL="${MODEL:-}"
+MODEL_IMPL="${MODEL_IMPL:-$MODEL}"
+MODEL_REVIEW="${MODEL_REVIEW:-$MODEL}"
+MISSING=""
+for v in PLANKA_PROJECT PLANKA_BOARD LIST_INBOX LIST_READY LIST_CLAIMED \
+         LIST_IN_PROGRESS LIST_READY_REVIEW LIST_AI_REVIEW LIST_HUMAN_REVIEW \
+         LIST_DONE LIST_REJECTED FIELD_GROUP BASE_GROUP FIELD_PROJECT \
+         FIELD_ATTEMPTS HERDR_RUN; do
+  [ -n "${!v:-}" ] || MISSING="$MISSING $v"
+done
+if [ -n "$MISSING" ]; then
+  echo "ERROR: incomplete config ($CONFIG) — set:$MISSING" >&2
+  exit 2
+fi
+if [ -z "$MODEL_IMPL" ] || [ -z "$MODEL_REVIEW" ]; then
+  echo "ERROR: no model configured ($CONFIG) — set MODEL and/or MODEL_IMPL / MODEL_REVIEW" >&2
+  exit 2
+fi
+
+# Thinking levels: THINKING_IMPL / THINKING_REVIEW append a pi `:level` suffix
+# to the resolved role model (off/minimal/low/medium/high/xhigh/max).
+# An explicit `:suffix` already on the model string wins.
+thinking_suffix() { # <model> <thinking> <role>
+  local m=$1 t=$2 role=$3
+  case "$t" in
+    "") echo "$m"; return;;
+    off|minimal|low|medium|high|xhigh|max)
+      if printf '%s' "$m" | grep -q ':'; then echo "$m"; else echo "$m:$t"; fi;;
+    *) echo "ERROR: bad $role thinking level '$t' (want off/minimal/low/medium/high/xhigh/max)" >&2; exit 2;;
+  esac
+}
+MODEL_IMPL=$(thinking_suffix "$MODEL_IMPL" "${THINKING_IMPL:-}" impl)
+MODEL_REVIEW=$(thinking_suffix "$MODEL_REVIEW" "${THINKING_REVIEW:-}" review)
+[ -x "$HERDR_RUN" ] || { echo "ERROR: HERDR_RUN is not executable: $HERDR_RUN" >&2; exit 2; }
 
 # Defaults for anything the config leaves unset
 : "${MAX_PARALLEL:=2}"
 : "${MAX_ATTEMPTS:=3}"
 : "${CARD_TIMEOUT:=3600}"
 : "${POLL_INTERVAL:=20}"
-: "${WT_ROOT:=$HOME/dev/worktrees}"
+: "${WT_ROOT:=$HOME/worktrees}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
@@ -57,7 +95,7 @@ comment_count() { # <card>
   plnk comment list --card "$1" --output json 2>/dev/null | jq -r '.data | length' 2>/dev/null || echo 0
 }
 
-proj_key() { # shell-safe key: non-alphanumeric -> _  (ai-proxy-king -> ai_proxy_king)
+proj_key() { # shell-safe key: non-alphanumeric -> _  (my-app -> my_app)
   echo "${1//[^a-zA-Z0-9]/_}"
 }
 proj_repo() { # <projectName> -> repo path (non-zero if unknown)
@@ -112,8 +150,8 @@ $text"
 # ---------------------------------------------------------------------------
 # agent launch + wait
 # ---------------------------------------------------------------------------
-run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef>
-  local card=$1 label=$2 wt=$3 promptfile=$4 baseref=$5 prompt
+run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model>
+  local card=$1 label=$2 wt=$3 promptfile=$4 baseref=$5 model=$6 prompt
   prompt=$(sed \
     -e "s/__CARD__/$card/g" \
     -e "s/__BASE_REF__/$baseref/g" \
@@ -121,18 +159,92 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef>
     -e "s/__LIST_READY_REVIEW__/$LIST_READY_REVIEW/g" \
     -e "s/__LIST_HUMAN_REVIEW__/$LIST_HUMAN_REVIEW/g" \
     "$promptfile")
-  "$HERDR_RUN" -m "$MODEL" -p "$prompt" -c "$wt" -l "$label" \
+  "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
     -w "$CARD_TIMEOUT_MS" --no-wait >/dev/null 2>&1
 }
 
-wait_for_card() { # <card> <listItLeaves> [timeout] -> 0 left, 1 timeout
-  local card=$1 from=$2 timeout=${3:-$CARD_TIMEOUT}
+# ---------------------------------------------------------------------------
+# idle rescue — the agent ended its turn without moving the card (observed in
+# the wild: report posted / verdict written, final `plnk card move` dropped).
+# The dispatcher completes the move from deterministic evidence; gates remain
+# the authority. Grace period avoids racing agent startup / brief idle states.
+# ---------------------------------------------------------------------------
+agent_idle() { # <wsLabel> — 0 if the workspace's agent exists and is not working
+  local ws agent status
+  ws=$(ws_id_by_label "$1")
+  [ -n "$ws" ] || return 1
+  agent=$(agent_by_ws "$ws")
+  [ -n "$agent" ] || return 1
+  status=$(herdr agent list 2>/dev/null \
+    | jq -r --arg a "$agent" '(.result // .) | .agents[]? | select(.name==$a) | .agent_status // empty' 2>/dev/null \
+    | head -1)
+  [ -n "$status" ] && [ "$status" != "working" ]
+}
+
+recent_transcript() { # <wsLabel> [lines]
+  local ws agent
+  ws=$(ws_id_by_label "$1")
+  [ -n "$ws" ] || return 1
+  agent=$(agent_by_ws "$ws")
+  [ -n "$agent" ] || return 1
+  herdr agent read "$agent" --source recent --lines "${2:-400}" 2>/dev/null | head -c 8000
+}
+
+rescue_implement() { # <card> <wsLabel> — always moves the card (0)
+  local card=$1 label=$2 text wt baseref commits
+  wt="$WT_ROOT/${PROJECT_OF[$card]}/$card"
+  baseref=$(proj_base_ref "${PROJECT_OF[$card]}")
+  text=$(recent_transcript "$label" 400)
+  if grep -q "STATUS: FAILED" <<<"$text"; then
+    add_comment "$card" "🔁 Dispatcher rescue: implementer ended its turn (STATUS: FAILED) without moving the card — moving to Ready."
+    move_card "$card" "$LIST_READY"
+    return 0
+  fi
+  commits=$(git -C "$wt" rev-list --count "$baseref..HEAD" 2>/dev/null || echo 0)
+  if [ "$commits" -ge 1 ]; then
+    add_comment "$card" "🔁 Dispatcher rescue: implementer ended its turn with $commits commit(s) but no card move — moving to Ready for Review (gates still apply)."
+    move_card "$card" "$LIST_READY_REVIEW"
+    return 0
+  fi
+  add_comment "$card" "⛔ Dispatcher rescue: implementer ended its turn with no commits and no card move — treating as failure."
+  move_card "$card" "$LIST_READY"
+  return 0
+}
+
+rescue_review() { # <card> <wsLabel> — 0 if a move was made, 1 if no verdict found
+  local card=$1 label=$2 text
+  text=$(recent_transcript "$label" 500)
+  if grep -q "VERDICT: APPROVE" <<<"$text"; then
+    add_comment "$card" "🔁 Dispatcher rescue: reviewer ended its turn with VERDICT: APPROVE but no card move — moving to Human Review."
+    move_card "$card" "$LIST_HUMAN_REVIEW"
+    return 0
+  fi
+  if grep -q "VERDICT: CHANGES REQUESTED" <<<"$text"; then
+    add_comment "$card" "🔁 Dispatcher rescue: reviewer ended its turn with VERDICT: CHANGES REQUESTED but no card move — moving to Ready."
+    move_card "$card" "$LIST_READY"
+    return 0
+  fi
+  log "rescue review $card: agent idle but no VERDICT line — no move"
+  return 1
+}
+
+wait_for_card() { # <card> <listItLeaves> [timeout] [wsLabel kind] -> 0 left, 1 timeout
+  local card=$1 from=$2 timeout=${3:-$CARD_TIMEOUT} label=${4:-} kind=${5:-}
   local start now
   start=$(date +%s)
   while :; do
     [ "$(card_list "$card")" != "$from" ] && return 0
     now=$(date +%s)
     [ $((now - start)) -ge "$timeout" ] && return 1
+    if [ -n "$label" ] && [ $((now - start)) -ge 120 ]; then
+      if agent_idle "$label"; then
+        if [ "$kind" = impl ]; then
+          rescue_implement "$card" "$label" && return 0
+        elif [ "$kind" = review ]; then
+          rescue_review "$card" "$label" && return 0
+        fi
+      fi
+    fi
     sleep "$POLL_INTERVAL"
   done
 }
@@ -207,7 +319,7 @@ finish_implementation() { # <card>
   baseref=$(proj_base_ref "$project")
   wt="$WT_ROOT/$project/$card"
 
-  if ! wait_for_card "$card" "$LIST_IN_PROGRESS"; then
+  if ! wait_for_card "$card" "$LIST_IN_PROGRESS" "" "impl-$card" impl; then
     bounce "$card" "impl-$card" "⛔ Dispatcher: implementation timed out after ${CARD_TIMEOUT}s."
     return 1
   fi
@@ -311,7 +423,7 @@ phase_implement() {
   for c in "${dispatched[@]}"; do
     p=${PROJECT_OF[$c]}
     br=$(proj_base_ref "$p")
-    run_agent "$c" "impl-$c" "$WT_ROOT/$p/$c" "$PROMPT_DIR/implementer.txt" "$br" &
+    run_agent "$c" "impl-$c" "$WT_ROOT/$p/$c" "$PROMPT_DIR/implementer.txt" "$br" "$MODEL_IMPL" &
   done
   wait
 
@@ -337,8 +449,8 @@ review_card() { # <card>
   local before
   before=$(comment_count "$card")
 
-  run_agent "$card" "review-$card" "$wt" "$PROMPT_DIR/reviewer.txt" "$baseref"
-  if ! wait_for_card "$card" "$LIST_AI_REVIEW"; then
+  run_agent "$card" "review-$card" "$wt" "$PROMPT_DIR/reviewer.txt" "$baseref" "$MODEL_REVIEW"
+  if ! wait_for_card "$card" "$LIST_AI_REVIEW" "" "review-$card" review; then
     add_comment "$card" "⛔ Dispatcher: review timed out after ${CARD_TIMEOUT}s — returning to Ready for Review."
     move_card "$card" "$LIST_READY_REVIEW"
     close_ws "review-$card"

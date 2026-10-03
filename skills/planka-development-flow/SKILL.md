@@ -20,23 +20,38 @@ You:       Human Review ──► Done (merge branch)  |  Rejected
 dispatch:  (next run) cleans worktrees + branches of Done cards
 ```
 
-Board: `Dispatch Board` in the `AI-Orchestration` project on
-`https://planka.denkfabrik.space/`. All IDs in [references/board-map.md](references/board-map.md).
+Board: `Dispatch Board` in the `AI-Orchestration` project on any Planka
+instance you control. Required structure and ID lookup in
+[references/board-map.md](references/board-map.md).
+
+## Setup (first time only)
+
+1. **Prerequisites** — `plnk` on PATH and authenticated, `herdr` server
+   running, `git`, `jq`, `flock`. (`plnk auth login --server <url> ...` —
+   see the plnk-cli skill for install/auth details.)
+2. **Board** — `scripts/setup-board.sh` creates the project, board, the 9
+   lists and the `Dispatch` field group (idempotent), and writes
+   `~/.config/planka-development-flow/config.env` with all IDs filled in.
+3. **Config** — in that file, set `MODEL` (or per-role `MODEL_IMPL` /
+   `MODEL_REVIEW`) and add at least one
+   `PROJ_<name>_repo` block for a repo you want to dispatch to (template:
+   `config/config.env.example`).
+4. **Verify** — `scripts/dispatch.sh status`.
 
 ## Quick start
 
 ```bash
-SKILL=/home/verfeinerer/skills/ai_agent_skills/skills/planka-development-flow
+SKILL=<path to this skill>
 
 $SKILL/scripts/dispatch.sh status      # board overview
 $SKILL/scripts/dispatch.sh run         # full pass: implement + review + cleanup
-$SKILL/scripts/new-card.sh --title "Add /foo" --project ai-proxy-king --desc /tmp/ticket.md
+$SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticket.md
 ```
 
 **Cron** (the intended periodic trigger — idempotent, lock-protected, safe to overlap):
 
 ```cron
-*/30 * * * * /home/verfeinerer/skills/ai_agent_skills/skills/planka-development-flow/scripts/dispatch.sh run >> ~/.config/planka-dispatch/dispatch.log 2>&1
+*/30 * * * * <path to this skill>/scripts/dispatch.sh run >> ~/.config/planka-development-flow/dispatch.log 2>&1
 ```
 
 ## Creating tickets
@@ -52,16 +67,16 @@ $SKILL/scripts/new-card.sh --title "Add /foo" --project ai-proxy-king --desc /tm
 
 ## Config
 
-`~/.config/planka-dispatch/config.env` (bash-sourced, no parser).
+`~/.config/planka-development-flow/config.env` (bash-sourced, no parser).
 Example: `config/config.env.example`. Per-project settings:
 
 ```bash
-# key = project field value with non-alphanumerics -> _  (ai-proxy-king -> ai_proxy_king)
-PROJ_ai_proxy_king_repo=/home/verfeinerer/dev/os_projects/ai-proxy-king
-PROJ_ai_proxy_king_base_ref=main
-PROJ_ai_proxy_king_test=go test ./...
-PROJ_ai_proxy_king_hard=.env* *.pem keys/* secrets/*
-PROJ_ai_proxy_king_soft=Dockerfile docker-compose.yml .gitlab/* .gitlab-ci.yml go.mod go.sum
+# key = project field value with non-alphanumerics -> _  (my-app -> my_app)
+PROJ_my_app_repo=$HOME/my-app
+PROJ_my_app_base_ref=main
+PROJ_my_app_test=npm test
+PROJ_my_app_hard=.env* *.pem keys/* secrets/*
+PROJ_my_app_soft=Dockerfile docker-compose.yml package.json package-lock.json
 ```
 
 | Key | Meaning |
@@ -69,7 +84,9 @@ PROJ_ai_proxy_king_soft=Dockerfile docker-compose.yml .gitlab/* .gitlab-ci.yml g
 | `MAX_PARALLEL` | tickets in flight per dispatch run (default 2) |
 | `MAX_ATTEMPTS` | bounces allowed before Rejected (default 3) |
 | `CARD_TIMEOUT` | seconds to wait for one agent (default 3600) |
-| `MODEL` | herdr/pi model for implementer + reviewer |
+| `MODEL` | herdr/pi model default for implementer + reviewer |
+| `MODEL_IMPL` / `MODEL_REVIEW` | per-role model overrides (fall back to `MODEL`) |
+| `THINKING_IMPL` / `THINKING_REVIEW` | pi thinking level per role (`off`…`max`), appended as a `:level` suffix |
 | `HERDR_RUN` | path to `run-pi-herdr.sh` |
 | `WT_ROOT` | worktree root (`<root>/<project>/<cardId>`) |
 | `*_hard` | file globs — touching any → bounce (gate G3 hard) |
@@ -91,7 +108,10 @@ Phases (details in [references/gates.md](references/gates.md)):
 Key design rule (learned the hard way — see [references/lessons.md](references/lessons.md)):
 **agents never post their own report comments.** The script checks after each
 run and auto-captures the agent's final transcript output from herdr if the
-comment is missing. The card move is the agent's only `plnk` mutation.
+comment is missing. The card move is the agent's only `plnk` mutation — and
+when the agent drops even that (turn ends, card unmoved), the dispatcher
+rescues: it detects the idle agent and completes the move from the
+transcript's verdict/status marker or the commit evidence (gates still apply).
 
 ## Prerequisites
 
@@ -110,7 +130,7 @@ comment is missing. The card move is the agent's only `plnk` mutation.
   failed is named in the bounce comment (`G1`/`G2`/`G3`).
 - `no eligible cards` but there are cards in Ready → check the `project` field
   value matches a config key, and `attempts` < `MAX_ATTEMPTS`.
-- Log file for cron runs: `~/.config/planka-dispatch/dispatch.log`
+- Log file for cron runs: `~/.config/planka-development-flow/dispatch.log`
 
 ## Extending
 
