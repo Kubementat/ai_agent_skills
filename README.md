@@ -173,6 +173,50 @@ Skills for development workflows and strategic planning.
 
 ---
 
+## Planka Development Flow
+
+This repository also ships the **planka-development-flow** skill — a ticket
+pipeline where Planka is the system of record and AI agents are the workers.
+A classical bash dispatcher script (`dispatch.sh`) does all the deterministic
+work (polling, claiming cards, spinning up git worktrees, running gates, auto-
+capturing reports, cleanup). The only agentic parts are the implementation
+session and the AI-review session, launched via [herdr](skills/herdr-cli/SKILL.md).
+
+```mermaid
+flowchart LR
+    Inbox["Inbox (you write tickets)"] -->|you move| Ready["Ready (gate)"]
+    Ready -->|dispatch claims| Claimed["Claimed"]
+    Claimed -->|dispatch creates worktree| InProgress["In Progress<br/>(agent implements)"]
+    InProgress -->|agent moves| G1["G1: ≥1 commit"]
+    G1 --> G2["G2: tests pass"]
+    G2 --> G3["G3: no protected files touched"]
+    G3 --> G4["G4: card in Ready for Review"]
+    G4 -->|gate fails| Ready
+    G4 -->|passes| ReviewReady["Ready for Review"]
+    ReviewReady -->|dispatch claims| AIR["In AI Review<br/>(agent reviews)"]
+    AIR -->|APPROVE| HR["Human Review (you)"]
+    AIR -->|CHANGES REQUESTED| Ready
+    HR -->|you merge & move| Done["Done"]
+    HR -->|you disagree| Rejected["Rejected"]
+    Done -->|next dispatch cleanup| WT[(remove worktree + branch)]
+    style Inbox fill:#e1ffc8
+    style Ready fill:#ffe6e6
+    style Done fill:#c8e1ff
+    style Rejected fill:#ff9999
+```
+
+In short: you write and prioritize tickets, moving the ones to work into
+`Ready`. The dispatcher picks them up, claims each one, creates a git
+worktree branched from `base_ref` (never `HEAD`), and launches an implementer
+agent. After the agent finishes, the dispatcher runs the gates (commits, tests,
+protected-file checks, final state). On success the card goes to `Ready for
+Review`; a reviewer agent then approves (→ `Human Review`) or requests changes
+(→ back to `Ready` without bumping attempts). You merge the branch and move the
+card to `Done`, at which point the dispatcher cleans up the worktree and branch.
+
+For the full setup guide, config reference, ticket contract, gate details and
+troubleshooting, see the full README: [planka-development-flow/README.md](skills/planka-development-flow/README.md).
+
 ## Agent Implementations
 
 The `agents/pi/` directory contains specialized agent configurations for the Pi coding agent:
