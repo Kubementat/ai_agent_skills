@@ -20,6 +20,7 @@ declare -A SUITE_FILES=(
     ["skill"]="$TESTS_DIR/test_install_skill.sh"
     ["agent"]="$TESTS_DIR/test_install_agent.sh"
     ["ext"]="$TESTS_DIR/test_install_extension.sh"
+    ["devflow"]="$TESTS_DIR/test_devflow_runner.sh"
 )
 
 # Decide which suites to run

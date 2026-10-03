@@ -28,6 +28,8 @@ WAIT=true
 KEEP=true
 EXPLAIN=false
 ENV_ARGS=()
+RO_BIND_ARGS=()
+LABEL=""
 RA_DIR=""
 
 usage() {
@@ -44,6 +46,8 @@ Launch a named agent profile as a sandboxed subagent (herdr workspace + asb).
   -c, --cwd <dir>               Working dir (default: $PWD)
   --harness <kind>              Override harness (v1: pi only)
   --env K=V                     Extra env var into sandbox (repeatable)
+  --ro-bind HOST[:DEST]         Bind mount host path read-only into sandbox (repeatable)
+  --label <label>               Override herdr workspace label (default: ra-<agent>-NNNN)
   --timeout <ms>                Wait timeout (default: 120000)
   --no-wait                     Fire-and-forget (submit prompt, don't wait)
   --keep / --no-keep            Keep herdr workspace (default: keep)
@@ -80,6 +84,8 @@ while [[ $# -gt 0 ]]; do
         -c|--cwd)     CWD="${2:?missing value for $1}"; shift 2 ;;
         --harness)    HARNESS="${2:?missing value for $1}"; shift 2 ;;
         --env)        ENV_ARGS+=("${2:?missing value for $1}"); shift 2 ;;
+        --ro-bind)    RO_BIND_ARGS+=("${2:?missing value for $1}"); shift 2 ;;
+        --label)      LABEL="${2:?missing value for $1}"; shift 2 ;;
         --timeout)    TIMEOUT="${2:?missing value for $1}"; shift 2 ;;
         --no-wait)    WAIT=false; shift ;;
         --keep)       KEEP=true; shift ;;
@@ -126,6 +132,7 @@ COMPOSE_ARGS=(compose "$AGENT" --cwd "${CWD:-$PWD}")
 [[ -n "$MODEL" ]] && COMPOSE_ARGS+=(--model "$MODEL")
 [[ -n "$WORKSPACE" ]] && COMPOSE_ARGS+=(--workspace "$WORKSPACE")
 for ev in "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}"; do COMPOSE_ARGS+=(--env "$ev"); done
+for rb in "${RO_BIND_ARGS[@]+"${RO_BIND_ARGS[@]}"}"; do COMPOSE_ARGS+=(--ro-bind "$rb"); done
 
 COMPOSED="$(python3 "$PROFILE_PY" "${COMPOSE_ARGS[@]}")" || exit 12
 COMMAND_STRING="$(printf '%s' "$COMPOSED" | jq -r '.command_string')"
@@ -175,7 +182,7 @@ herdr_ensure_server() {
 herdr_ensure_server
 
 SUFFIX="$(printf '%04d' $((RANDOM % 10000)))"
-LABEL="ra-${AGENT}-${SUFFIX}"
+LABEL="${LABEL:-ra-${AGENT}-${SUFFIX}}"
 RUN_CWD="${CWD:-$PWD}"
 
 progress "Creating workspace $LABEL (cwd: $RUN_CWD)..."
