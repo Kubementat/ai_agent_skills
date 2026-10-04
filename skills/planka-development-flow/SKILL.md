@@ -4,7 +4,7 @@ description: Orchestrate the Planka-based AI development workflow — create tic
 ---
 
 # Your role
-You are a product manager of the software development lifecycle using the planka development flow described below to control and manage your team of agents.
+You are a product manager of the software development lifecycle using the planka development flow described below to control and manage your team of agents. 
 You help the user to plan and enqueue work items in form of tickets to the planka board.
 You are an expert planka and Kanban user.
 
@@ -13,7 +13,7 @@ You are an expert planka and Kanban user.
 A ticket pipeline where **Planka is the system of record** and **agents are workers**.
 A classical bash script (`dispatch.sh`) does everything deterministic — polling,
 claiming, worktrees, gates, reporting, cleanup. The only agentic parts are the
-implementation session and the AI-review session, launched via herdr or runagent.
+implementation session and the AI-review session, launched via herdr.
 
 ```
 You:       Inbox ──► Ready           (write ticket, you decide what gets worked)
@@ -73,8 +73,7 @@ $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticke
 ## Config
 
 `~/.config/planka-development-flow/config.env` (bash-sourced, no parser).
-The config path can be overridden with the `PLANKA_DEVFLOW_CONFIG` environment
-variable. Example: `config/config.env.example`. Per-project settings:
+Example: `config/config.env.example`. Per-project settings:
 
 ```bash
 # key = project field value with non-alphanumerics -> _  (my-app -> my_app)
@@ -93,61 +92,10 @@ PROJ_my_app_soft=Dockerfile docker-compose.yml package.json package-lock.json
 | `MODEL` | herdr/pi model default for implementer + reviewer |
 | `MODEL_IMPL` / `MODEL_REVIEW` | per-role model overrides (fall back to `MODEL`) |
 | `THINKING_IMPL` / `THINKING_REVIEW` | pi thinking level per role (`off`…`max`), appended as a `:level` suffix |
-| `HERDR_RUN` | path to `run-pi-herdr.sh` (required when `RUNNER=herdr`) |
+| `HERDR_RUN` | path to `run-pi-herdr.sh` |
 | `WT_ROOT` | worktree root (`<root>/<project>/<cardId>`) |
-| `RUNNER` | agent runner: `herdr` (default, legacy) or `runagent` (sandboxed via asb) |
-| `RUNAGENT` | command name or absolute path to the `runagent` script (used when `RUNNER=runagent`) |
-| `AGENT_IMPL` | runagent profile name for the implementer agent (default: `impl`) |
-| `AGENT_REVIEW` | runagent profile name for the reviewer agent (default: `review`) |
 | `*_hard` | file globs — touching any → bounce (gate G3 hard) |
 | `*_soft` | file globs — touching any → flag comment, continues (gate G3 soft) |
-
-## Sandboxing (RUNNER=runagent)
-
-When `RUNNER=runagent`, agents run inside an asb bubblewrap sandbox. The
-sandbox provides OS-enforced boundaries:
-
-### Verified sandbox boundaries (asb v1)
-
-- **OS-enforced read-only:** `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin` are
-  read-only (writes fail with "Read-only file system").
-- **Private `/etc`:** only `resolv.conf`, `hosts`, `passwd`, `group`, and
-  SSL certs are visible (read-only); `sudoers`, `shadow` are hidden (blocks
-  in-sandbox sudo escalation).
-- **Private `/tmp`:** a private tmpfs — the host `/tmp` is not visible.
-- **Dropped groups:** supplementary groups are dropped (primary group +
-  nogroup only).
-
-### Not enforced (asb v1, documented by asb's authors)
-
-- `$HOME` is visible and writable (same as an unsandboxed same-uid run).
-- No network isolation.
-- herdr socket is readable/writable and `HERDR_*` vars are forwarded.
-
-### Threat model
-
-The sandbox bounds accidental scope creep and side effects — it is not a
-malicious-agent defense. In-repo protected files remain the G3 hard-globs
-backstop (OS-independent). Hard isolation (microVM tier, egress proxy) is
-asb's planned follow-up; the pipeline needs no changes when it lands.
-
-### Reviewer read-only worktree
-
-In runagent mode the reviewer's worktree is mounted read-only via asb's
-`--ro-bind` flag (OS-enforced). If asb does not support `--ro-bind`
-(older versions), the dispatcher logs a warning and falls back to the
-reviewer relying on its pi `--tools` read-only set (no `write`/`edit` tools).
-
-### Setup agent profiles
-
-`scripts/setup-agents.sh` installs profile templates into
-`~/.pi/agent/agents/` (called automatically by `setup-board.sh`). Profiles
-are never overwritten on re-run. After merge, deploy:
-
-1. `git pull` the clone that `~/.pi/agent/skills` symlinks into.
-2. `cp skills/herdr-cli/scripts/runagent ~/.local/bin/runagent`
-3. Set `RUNNER=runagent` in `~/.config/planka-development-flow/config.env`.
-4. Run `scripts/setup-agents.sh`.
 
 ## How dispatch works
 
@@ -156,9 +104,8 @@ Phases (details in [references/gates.md](references/gates.md)):
 - **implement** — pick up to `MAX_PARALLEL` eligible Ready cards (project known,
   attempts < max), claim each (`Ready → Claimed → In Progress`), create the git
   worktree from `base_ref` (never HEAD), launch implementer agents in parallel
-  via herdr (or runagent), poll card state, then run gates G1–G4 and the report check.
+  via herdr, poll card state, then run gates G1–G4 and the report check.
 - **review** — same pattern for `Ready for Review` cards, with the reviewer agent.
-  In runagent mode the reviewer's worktree is OS-enforced read-only.
   APPROVE → `Human Review`; CHANGES REQUESTED → `Ready` (re-implementation reads
   the review comment).
 - **cleanup** — remove worktrees + `ai/<cardId>` branches of `Done` cards.
@@ -178,9 +125,8 @@ transcript's verdict/status marker or the commit evidence (gates still apply).
 
 - `plnk` CLI on PATH with valid token (`plnk auth whoami`)
 - `herdr` server running (`herdr status`; start: `nohup herdr server > /tmp/herdr-server.log 2>&1 &`)
-- `run-pi-herdr.sh` (herdr-cli skill) at `$HERDR_RUN` (required when `RUNNER=herdr`)
-- `runagent` script (herdr-cli skill) accessible via `$RUNAGENT` or PATH (required when `RUNNER=runagent`)
-- `git`, `jq`, `flock`
+- `run-pi-herdr.sh` (herdr-cli skill) at `$HERDR_RUN`
+- git, jq, flock
 
 ## Troubleshooting
 
@@ -201,5 +147,4 @@ This skill is the home of the system. When improving it:
 - prompt changes → `scripts/prompts/{implementer,reviewer}.txt`
 - new gates/phases → `scripts/dispatch.sh` (document in references/gates.md)
 - new repo → add `PROJ_<name>_*` keys to the config
-- new agent profiles → add to `profiles/` and run `setup-agents.sh`
 - keep the core rule: **deterministic work in the script, fuzzy work in agents**
