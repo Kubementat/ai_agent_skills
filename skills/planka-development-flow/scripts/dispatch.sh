@@ -18,6 +18,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_DIR="$SCRIPT_DIR/prompts"
+SKILL_PATH="$(cd "$SCRIPT_DIR/../" && pwd)/SKILL.md"
 CONFIG=${PLANKA_DEVFLOW_CONFIG:-"$HOME/.config/planka-development-flow/config.env"}
 LOCKFILE="${TMPDIR:-/tmp}/planka-devflow.lock"
 
@@ -190,9 +191,9 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
     "$promptfile")
 
   if [ "$RUNNER" = "herdr" ]; then
-    # --- herdr runner (regression: byte-identical to pre-change invocation) ---
+    # --- herdr runner ---
     "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
-      -w "$CARD_TIMEOUT_MS" --no-wait >/dev/null 2>&1
+      -w "$CARD_TIMEOUT_MS" --no-wait --skill "$SKILL_PATH" >/dev/null 2>&1
   else
     # --- runagent runner ---
     local profile="$AGENT_IMPL"

@@ -58,6 +58,7 @@ executed — edit it to change behavior for all three at once).
 |--------|--------|-------------|
 | pi, claude | `-sp, --system-prompt <text>` | Replace the system prompt (claude also expands `@file`) |
 | pi, claude | `-asp, --append-system-prompt <text>` | Append to the system prompt (repeatable) |
+| pi | `-pr, --profile <name>` | Resolve skills from an agent profile (`~/.pi/agent/agents/<name>.md`) via `agent_profile.py` (same resolution as `runagent`) and add `--skill` flags |
 | claude | `--agent <name>` / `--agents <json>` | Predefined subagent / inline subagent definitions |
 | claude | `--permission-mode <mode>` | `default`, `acceptEdits`, `plan`, `bypassPermissions` |
 | claude | `--yolo` | `--dangerously-skip-permissions` (sandboxes only) |
@@ -77,6 +78,9 @@ scripts/run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Review the di
 
 # Fire-and-forget
 scripts/run-pi-herdr.sh -m "qwen3.6-35b" -p "Run the full test suite" --no-wait
+
+# Skills resolved from an agent profile (impl/review from the planka skill)
+scripts/run-pi-herdr.sh --profile impl -m "dgx/qwen3.8-27b-q4" -p "Fix PLANKA-42" --no-wait
 ```
 
 Run any script with `--help` (or no arguments) for its full option list and examples.

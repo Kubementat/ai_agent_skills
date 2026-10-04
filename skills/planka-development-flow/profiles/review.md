@@ -2,12 +2,12 @@
 name: review
 harness: pi
 tools: [bash, read, grep, find, ls]
-skills: []
+skills: [planka-development-flow, karpathy-guidelines, plnk-cli]
 mcp: none
 sandbox:
   on: true
   workspace: null
-  env: []
+  env: [PLANKA_SERVER, PLANKA_TOKEN]
   ro_bind: []
 # model: <provider>/<model>  (override at launch)
 ---

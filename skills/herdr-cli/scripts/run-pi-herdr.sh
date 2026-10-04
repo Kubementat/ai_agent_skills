@@ -3,7 +3,8 @@
 # Run with --help for usage and examples.
 
 set -euo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/herdr-common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/herdr-common.sh"
 # shellcheck disable=SC2034
 AGENT_KIND="pi"
 # shellcheck disable=SC2034
@@ -12,6 +13,9 @@ AGENT_PREFIX="pi"
 LABEL_PREFIX="pi"
 SYSTEM_PROMPT=""
 APPEND_SYSTEM_PROMPTS=()
+SKILL_PATHS=()
+PROFILE=""
+NO_SKILLS=false
 usage() {
     cat <<'USAGE'
 Usage: run-pi-herdr.sh -m <model> -p "<prompt>" [options]
@@ -22,6 +26,11 @@ Options:
   -p, --prompt <prompt>            Task prompt (required)
   -sp, --system-prompt <text>      Replace pi's system prompt
   -asp, --append-system-prompt <txt> Append to system prompt (repeatable, @file)
+  -sk, --skill <path>              Load a skill file or directory (repeatable)
+  -pr, --profile <name>            Resolve skills from an agent profile
+                                   (~/.pi/agent/agents/<name>.md) using
+                                   agent_profile.py (same resolution as
+                                   runagent) and add --skill flags
   -w, --timeout <ms>               Wait timeout (default: 120000)
   -n, --name <name>                Agent name (default: auto-generated)
   -c, --cwd <path>                 Working directory (default: current dir)
@@ -32,13 +41,16 @@ Options:
 Examples:
   run-pi-herdr.sh -m "evo/ornith-1.0-35b-Q6" -p "Explain src/main.ts"
   run-pi-herdr.sh -m "qwen3.6-35b" -p "Run tests" --no-wait
+  run-pi-herdr.sh --profile impl -m "dgx/qwen3.8-27b-q4" -p "Fix PLANKA-42" --no-wait
 USAGE
 }
 [[ $# -eq 0 ]] && usage && exit 0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -sp|--system-prompt)  SYSTEM_PROMPT="$2"; shift 2 ;;
+        -sp|--system-prompt)    SYSTEM_PROMPT="$2"; shift 2 ;;
         -asp|--append-system-prompt) APPEND_SYSTEM_PROMPTS+=("$2"); shift 2 ;;
+        -sk|--skill)            SKILL_PATHS+=("$2"); shift 2 ;;
+        -pr|--profile)          PROFILE="$2"; shift 2 ;;
         *)
             herdr_parse_common_arg "$@"
             if [[ "$HERDR_SHIFT" -eq 0 ]]; then
@@ -50,6 +62,24 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 herdr_validate_and_defaults
+# Resolve profile skills via agent_profile.py (same mechanism as runagent):
+#   skills: [a, b] → --no-skills --skill <a> --skill <b>
+#   skills: []     → --no-skills
+#   absent / all   → pi's default skill discovery
+if [[ -n "$PROFILE" ]]; then
+    PROFILE_PY="$SCRIPT_DIR/agent_profile.py"
+    [[ -f "$PROFILE_PY" ]] || { echo "ERROR: profile parser not found: $PROFILE_PY" >&2; exit 1; }
+    PROFILE_SKILLS_JSON="$(python3 "$PROFILE_PY" skills "$PROFILE" --cwd "$CWD")" || exit 12
+    if [[ "$(printf '%s' "$PROFILE_SKILLS_JSON" | jq -r '.skills | type')" == "array" ]]; then
+        NO_SKILLS=true
+        while IFS= read -r resolved_skill; do
+            [[ -n "$resolved_skill" ]] && SKILL_PATHS+=("$resolved_skill")
+        done < <(printf '%s' "$PROFILE_SKILLS_JSON" | jq -r '.skills[]')
+        echo "Profile '$PROFILE' resolved $(printf '%s' "$PROFILE_SKILLS_JSON" | jq '.skills | length') skill(s)"
+    else
+        echo "Profile '$PROFILE': no skill list (pi default discovery)"
+    fi
+fi
 herdr_remove_stale_agent
 herdr_ensure_server
 herdr_create_workspace
@@ -57,6 +87,12 @@ PI_ARGS=("--model" "$MODEL")
 [[ -n "$SYSTEM_PROMPT" ]] && PI_ARGS+=("--system-prompt" "$SYSTEM_PROMPT")
 for extra in "${APPEND_SYSTEM_PROMPTS[@]+"${APPEND_SYSTEM_PROMPTS[@]}"}"; do
     PI_ARGS+=("--append-system-prompt" "$extra")
+done
+if [[ "$NO_SKILLS" == true ]]; then
+    PI_ARGS+=("--no-skills")
+fi
+for s in "${SKILL_PATHS[@]+"${SKILL_PATHS[@]}"}"; do
+    PI_ARGS+=("--skill" "$s")
 done
 herdr_start_agent "${PI_ARGS[@]}"
 herdr_run_prompt

@@ -13,6 +13,9 @@ CLI:
   agent_profile.py compose <agent> [--model M] [--workspace DIR] [--cwd DIR]
                            [--env K=V]... [--ro-bind HOST[:DEST]]...
                            [--bind HOST[:DEST]]... [--json]
+  agent_profile.py skills <agent> [--cwd DIR]
+      Print the profile's resolved skills as JSON: {"skills": null | "all"
+      | ["/path/to/SKILL.md", ...]}. Symlinked skills are followed (is_file).
   agent_profile.py list
 
 Exit codes: 0 ok, 2 usage, 12 profile resolution failure.
@@ -604,6 +607,25 @@ def cmd_list(_args):
     return 0
 
 
+def cmd_skills(args):
+    if not args:
+        print("usage: agent_profile.py skills <agent> [--cwd DIR]", file=sys.stderr)
+        return 2
+    name = args[0]
+    cwd = None
+    i = 1
+    while i < len(args):
+        if args[i] == "--cwd":
+            cwd = args[i + 1]; i += 2
+        else:
+            print(f"unknown option: {args[i]}", file=sys.stderr)
+            return 2
+    fm, _, _ = load_profile(name, cwd)
+    skills = resolve_skills(fm.get("skills"), cwd)
+    print(json.dumps({"skills": skills}))
+    return 0
+
+
 def cmd_compose(args):
     if not args:
         print("usage: agent_profile.py compose <agent> [--model M] [--workspace DIR] [--cwd DIR] [--env K=V] [--ro-bind HOST[:DEST]]", file=sys.stderr)
@@ -641,6 +663,8 @@ def main(argv):
     try:
         if cmd == "list":
             return cmd_list(rest)
+        if cmd == "skills":
+            return cmd_skills(rest)
         if cmd == "compose":
             return cmd_compose(rest)
         print(f"unknown command: {cmd}", file=sys.stderr)

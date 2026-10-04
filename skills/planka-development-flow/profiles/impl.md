@@ -2,12 +2,12 @@
 name: impl
 harness: pi
 tools: [bash, read, write, edit, grep, find, ls]
-skills: [ponytail, karpathy-guidelines, plnk-cli]
+skills: [planka-development-flow, ponytail, karpathy-guidelines, plnk-cli]
 mcp: none
 sandbox:
   on: true
   workspace: null
-  env: []
+  env: [PLANKA_SERVER, PLANKA_TOKEN]
   ro_bind: []
 # model: <provider>/<model>  (override at launch)
 ---
