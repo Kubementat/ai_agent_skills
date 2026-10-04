@@ -67,11 +67,13 @@ herdr_validate_and_defaults() {
     fi
 
     MODEL_SHORT="${MODEL##*/}"  # strip provider prefix
-    # Sanitize agent name: lowercase, replace dots with underscores, truncate
-    # to 28 chars (leaves room for the prefix = 32 char max).
-    SAFE_MODEL="${MODEL_SHORT//./_}"
-    SAFE_MODEL="${SAFE_MODEL,,}"
-    SAFE_MODEL="${SAFE_MODEL:0:28}"
+    # Sanitize agent name: lowercase, replace every char outside [a-z0-9_-]
+    # with underscores (dots, ':' from pi ':level' thinking suffixes, ...),
+    # truncate to 24 chars (prefix + 4-digit suffix keep the name at herdr's
+    # 32-char max).
+    SAFE_MODEL="${MODEL_SHORT,,}"
+    SAFE_MODEL="${SAFE_MODEL//[^a-z0-9_-]/_}"
+    SAFE_MODEL="${SAFE_MODEL:0:24}"
 
     if [[ -z "$AGENT_NAME" ]]; then
         AGENT_NAME="${AGENT_PREFIX}-${SAFE_MODEL}-${UNIQUE_SUFFIX}"
