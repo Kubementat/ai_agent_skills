@@ -205,6 +205,27 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
       ro_bind_args="--ro-bind $wt"
     fi
 
+    # A linked git worktree's .git is a pointer file into the main repo's
+    # common .git dir, which lives OUTSIDE the workspace and is therefore
+    # invisible in the asb sandbox. Bind the common dir so git resolves
+    # in-sandbox:
+    #   implementer -> writable (--bind, it commits)
+    #   reviewer    -> read-only (--ro-bind, it only inspects)
+    local git_common
+    git_common="$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null || true)"
+    if [ -n "$git_common" ] && [[ "$git_common" != /* ]]; then
+      if ( cd "$wt" && cd "$git_common" ); then
+        git_common="$(pwd)"
+      fi
+    fi
+    if [ -n "$git_common" ] && [ -d "$git_common" ]; then
+      if [ "$is_reviewer" = true ]; then
+        ro_bind_args="$ro_bind_args --ro-bind $git_common"
+      else
+        ro_bind_args="$ro_bind_args --bind $git_common"
+      fi
+    fi
+
     local model_arg=""
     [ -n "$model" ] && model_arg="-m $model"
 
