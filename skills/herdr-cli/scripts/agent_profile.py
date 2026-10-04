@@ -11,7 +11,8 @@ This module is stdlib-only (no pyyaml). It implements a small YAML subset:
 
 CLI:
   agent_profile.py compose <agent> [--model M] [--workspace DIR] [--cwd DIR]
-                           [--env K=V]... [--ro-bind HOST[:DEST]]... [--json]
+                           [--env K=V]... [--ro-bind HOST[:DEST]]...
+                           [--bind HOST[:DEST]]... [--json]
   agent_profile.py list
 
 Exit codes: 0 ok, 2 usage, 12 profile resolution failure.
@@ -424,7 +425,7 @@ def _normalize_ro_bind(host_path):
 # ── Composer ──────────────────────────────────────────────────────────────
 
 def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
-                   sandbox_override=None, extra_ro_bind=None):
+                   sandbox_override=None, extra_ro_bind=None, extra_bind=None):
     """Compose the launch for a profile. Returns (argv, meta) — pure, no side effects
     other than writing the filtered MCP config temp file (path in meta['mcp_config']).
 
@@ -435,6 +436,7 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
     fm, body, path = load_profile(name, cwd)
     extra_env = list(extra_env or [])
     extra_ro_bind = list(extra_ro_bind or [])
+    extra_bind = list(extra_bind or [])
 
     model = model or fm.get("model")
     if not model:
@@ -479,6 +481,14 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
         if p not in seen_rb:
             seen_rb.add(p)
             ro_bind_paths.append(p)
+
+    # Writable bind paths from CLI --bind args (dedup, same HOST[:DEST] spec)
+    seen_b = set()
+    bind_paths = []
+    for p in (_normalize_ro_bind(x) for x in extra_bind):
+        if p not in seen_b:
+            seen_b.add(p)
+            bind_paths.append(p)
 
     # The asb sandbox bind-mounts the workspace dir (read-write) at its host
     # path, but /tmp is a private tmpfs — host /tmp files are NOT visible
@@ -538,14 +548,16 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
         argv = ["asb", "pi", ws]
         for ev in env_args:
             argv += ["--env", ev]
-        # Add --ro-bind entries (each path repeated: --ro-bind <path> <path>)
+        # Add --ro-bind / --bind entries (asb takes one HOST[:DEST] value each)
         for rb in ro_bind_paths:
-            argv += ["--ro-bind", rb, rb]
+            argv += ["--ro-bind", rb]
+        for b in bind_paths:
+            argv += ["--bind", b]
         argv += pi_argv[1:]
     else:
-        # sandbox off: warn about CLI --ro-bind args and ignore them
-        if ro_bind_paths:
-            print("WARNING: profile sandbox is off; ignoring --ro-bind args", file=sys.stderr)
+        # sandbox off: warn about CLI bind args and ignore them
+        if ro_bind_paths or bind_paths:
+            print("WARNING: profile sandbox is off; ignoring --ro-bind/--bind args", file=sys.stderr)
         argv = list(pi_argv)
 
     meta = {
@@ -611,6 +623,8 @@ def cmd_compose(args):
             kw.setdefault("extra_env", []).append(args[i + 1]); i += 2
         elif a == "--ro-bind":
             kw.setdefault("extra_ro_bind", []).append(args[i + 1]); i += 2
+        elif a == "--bind":
+            kw.setdefault("extra_bind", []).append(args[i + 1]); i += 2
         else:
             print(f"unknown option: {a}", file=sys.stderr)
             return 2
