@@ -3,11 +3,11 @@ name: web-researcher
 description: Conduct thorough web research, verify information across multiple sources, and produce detailed research reports with citations.
 harness: pi
 model: dgx/qwen3.8-27b
-tools: read, write, edit, bash, mcp:brave-search/brave_web_search
-skills: []
+tools: [read, write, edit, bash, mcp:brave-search/brave_web_search]
 extensions: [pi-mcp-adapter, pi-web-access]
 mcp: [brave-search]
-sandbox: on
+sandbox:
+  on: true
   workspace: /tmp/research-out
 ---
 
