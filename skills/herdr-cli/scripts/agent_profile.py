@@ -419,10 +419,14 @@ def translate_tools(tools):
     return ",".join(out)
 
 
-def _normalize_ro_bind(host_path):
-    """Normalize a ro-bind HOST[:DEST] spec to just the host path (asb uses host path)."""
-    # asb --ro-bind takes HOST[:DEST]; we pass the host path as the value
-    return host_path.split(":")[0] if ":" in host_path else host_path
+def _normalize_bind_spec(spec):
+    """Normalize a bind HOST[:DEST] spec: expand ~ on host (and dest) so asb
+    receives absolute paths (asb rejects non-absolute host/dest paths)."""
+    host, sep, dest = spec.partition(":")
+    host = os.path.expanduser(host)
+    if sep:
+        return f"{host}:{os.path.expanduser(dest)}"
+    return host
 
 
 # ── Composer ──────────────────────────────────────────────────────────────
@@ -476,7 +480,7 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
     profile_ro_bind = []
     if isinstance(sandbox.get("ro_bind"), list):
         profile_ro_bind = [str(p) for p in sandbox["ro_bind"]]
-    all_ro_bind = list(profile_ro_bind) + [_normalize_ro_bind(p) for p in extra_ro_bind]
+    all_ro_bind = [_normalize_bind_spec(p) for p in list(profile_ro_bind) + list(extra_ro_bind)]
     # Dedup while preserving order
     seen_rb = set()
     ro_bind_paths = []
@@ -485,10 +489,13 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
             seen_rb.add(p)
             ro_bind_paths.append(p)
 
-    # Writable bind paths from CLI --bind args (dedup, same HOST[:DEST] spec)
+    # Writable bind paths: profile sandbox.bind + CLI --bind args (dedup, HOST[:DEST] spec)
+    profile_bind = []
+    if isinstance(sandbox.get("bind"), list):
+        profile_bind = [str(p) for p in sandbox["bind"]]
     seen_b = set()
     bind_paths = []
-    for p in (_normalize_ro_bind(x) for x in extra_bind):
+    for p in (_normalize_bind_spec(x) for x in list(profile_bind) + list(extra_bind)):
         if p not in seen_b:
             seen_b.add(p)
             bind_paths.append(p)

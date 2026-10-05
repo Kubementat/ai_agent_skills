@@ -166,7 +166,7 @@ bind mounts), `--label <label>`, `--harness <kind>`, `--timeout <ms>`, `--no-wai
 | `skills` | **fail-closed allowlist**: absent = no skills; `[all]` = auto-discovery; explicit names resolved (project `.pi/skills`, `~/.pi/agent/skills`, `~/.agents/skills`, npm packages); unknown name = hard fail (exit 12) |
 | `extensions` | **fail-closed allowlist**, same pattern; resolved against `settings.json` packages (npm + local), dirs resolved to entry files |
 | `mcp` | **fail-closed allowlist**: absent = explicit empty MCP config; `[all]` = global config; listed servers must exist in `mcp-adapter.json` (their inline `env` blocks travel with the server) |
-| `sandbox` | `on` (default) / `off`, or mapping with `workspace:` (pinned writable dir) and `env:` (extra `--env` forwarding). asb sandbox: single writable dir = workspace, system dirs ro, env cleared |
+| `sandbox` | `on` (default) / `off`, or mapping with `workspace:` (pinned writable dir), `env:` (extra `--env` forwarding), `ro_bind:` (read-only bind mounts, `HOST[:DEST]`, `~` expanded) and `bind:` (read-write bind mounts, same syntax). asb sandbox: single writable dir = workspace, system dirs ro, env cleared |
 
 Body = the agent's system prompt (applied via pi `--append-system-prompt` from a temp copy in
 `<workspace>/.runagent/`, removed on exit — host `/tmp` is a private tmpfs inside asb and not
