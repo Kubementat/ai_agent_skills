@@ -50,6 +50,7 @@ SKILL=<path to this skill>
 
 $SKILL/scripts/dispatch.sh status      # board overview
 $SKILL/scripts/dispatch.sh run         # full pass: implement + review + cleanup
+$SKILL/scripts/dispatch.sh test-capture <worktree>   # self-test transcript capture
 $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticket.md
 ```
 
@@ -109,6 +110,8 @@ PROJ_my_app_soft=Dockerfile docker-compose.yml package.json package-lock.json
 | `THINKING_IMPL` / `THINKING_REVIEW` | pi thinking level per role (`off`…`max`), appended as a `:level` suffix |
 | `HERDR_RUN` | path to `run-pi-herdr.sh` |
 | `WT_ROOT` | worktree root (`<root>/<project>/<cardId>`) |
+| `LAUNCH_LOG_DIR` | per-launch launcher logs `launch-<label>.log` (default `~/.config/planka-development-flow/launch-logs`) |
+| `LAUNCH_VERIFY_TIMEOUT` | seconds to wait for the launched agent's herdr workspace before the launch counts as failed (default 60) |
 | `*_hard` | file globs — touching any → bounce (gate G3 hard) |
 | `*_soft` | file globs — touching any → flag comment, continues (gate G3 soft) |
 
@@ -172,6 +175,13 @@ transcript's verdict/status marker or the commit evidence (gates still apply).
   id) with no `launched` line in the log usually means a hand-run dispatch or an
   operator-reset Rejected card, not corruption. Card comments are the ground
   truth: operator notes and `🚀 Dispatched` entries land there, not in the log.
+- `launch failed: no herdr workspace for impl-<cardId>` → the launcher died
+  before creating the session; read the named
+  `$LAUNCH_LOG_DIR/launch-impl-<cardId>.log`. The card is bounced back to
+  Ready instead of idling an hour in In Progress.
+- Missing auto-captured report → the herdr read failed *and* the pi session
+  fallback found nothing; `dispatch.sh test-capture <worktree>` exercises the
+  same fallback (session dir is `~/.pi/agent/sessions/--<path-with-dashes>--`).
 
 ## Extending
 

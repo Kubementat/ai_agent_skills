@@ -91,11 +91,16 @@ config value containing `/` (e.g. `PROJ_x_base_ref="origin/feat/pyinfra-migratio
 terminates the s-command early: `sed: unknown option to 's'` → empty prompt →
 herdr agent launched with no instructions (output sent to /dev/null, so silent)
 → card burns its attempt and times out an hour later.
-**Rule: interpolate untrusted values into sed with a delimiter unlikely to
-occur in them — `s|__TOKEN__|$val|g` — and refuse to launch on an empty
-rendered prompt (guard added in dispatch.sh 2026-10-19). When a dispatch run
-logs "launched" but `herdr workspace list` shows no new `impl-*` workspace
-within a minute, suspect this class of silent launch failure.**
+**Rule: don't interpolate untrusted values into `sed` at all — every delimiter
+is some value you can collide with. `run_agent()` now renders prompts with
+pure bash substitution over placeholder/value pairs (`render_prompt()`: no
+external renderer, no delimiter class) and still refuses to launch on an empty
+rendered prompt. Two gotchas hit while replacing it: the pattern must be quoted
+(`${content//"$pat"/"$val"}`) to match literally, and bash >= 5.3 treats an
+unquoted `&` in the replacement as "the matched text", so the value must be
+quoted too. When a dispatch run logs "launched" but `herdr workspace list`
+shows no new `impl-*` workspace within a minute, suspect this class of silent
+launch failure.**
 
 ## 11. Workers can confabulate harness states that don't exist (pi "plan mode", 2026-10-19)
 
@@ -126,3 +131,22 @@ bounce with cause "agent process died", not "read empty"; (2) fall back to the
 pi session JSONL (`agent_session_path` from `herdr agent list`) for the last
 assistant text block — durable, immune to pane death; (3) before trusting a card
 move as a worker's final act, cross-check agent liveness in `herdr agent list`.**
+
+## 13. A fallback you cannot test is a fallback that doesn't exist (2026-10-19)
+
+The JSONL fallback of lesson 12 was itself dead code: it built the session
+directory as `path | sed 's|/|-|g'` -> `-workspace-...`, while pi encodes a cwd
+as slashes-as-dashes wrapped in **two** dashes on each side —
+`/workspace/worktrees/kwisatz/123` ->
+`~/.pi/agent/sessions/--workspace-worktrees-kwisatz-123--`. That glob could
+never match, so production logged "no session fallback" while valid session
+files sat there. The same run logged `launched 1 implementer(s)` before
+verifying anything and sent launcher output to `/dev/null`, so a launch that
+created no workspace looked like success for a full `CARD_TIMEOUT`.
+**Rule: (1) derive a path encoding from a real `ls` of the host, never from a
+mental model, and keep it in one named helper (`pi_session_dir()`) shared by
+the pipeline and its self-test; (2) every fallback gets a command that proves
+it — `dispatch.sh test-capture <worktree>` prints the recovered assistant text
+and exits non-zero when it cannot; (3) a launch is not "launched" until its
+herdr workspace exists (`wait_for_workspace`), and launcher stdout/stderr
+belongs in `$LAUNCH_LOG_DIR/launch-<label>.log`, never `/dev/null`.**
