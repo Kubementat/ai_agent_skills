@@ -153,23 +153,33 @@ close_ws() { # <label>
   [ -n "$ws" ] && herdr workspace close "$ws" >/dev/null 2>&1
   return 0
 }
-capture_report() { # <card> <wsLabel>
+capture_report() { # <card> <wsLabel> [worktree]
   # Post the agent's final transcript output as a card comment.
   # The pipeline owns reporting: agents are not trusted to post it.
-  local agent text ws
+  local agent text ws errf wt_fallback=${3:-}
   ws=$(ws_id_by_label "$2")
   [ -z "$ws" ] && { log "capture $2: no workspace found"; return 1; }
   agent=$(agent_by_ws "$ws")
   [ -z "$agent" ] && { log "capture $2: workspace $ws has no named agent"; return 1; }
   # The card move lands a beat before the agent's terminal buffer settles, so
-  # retry the read a few times rather than racing the flush.
+  # retry the read a few times rather than racing the flush. An
+  # agent_not_found on stderr means the PROCESS DIED — retrying is pointless.
   local i
+  errf=$(mktemp)
   for i in 1 2 3 4 5; do
-    text=$(herdr agent read "$agent" --source recent --lines 200 2>/dev/null | head -c 4000)
+    text=$(herdr agent read "$agent" --source recent --lines 200 2>"$errf" | head -c 4000)
     [ -n "$text" ] && break
+    grep -q 'agent_not_found' "$errf" 2>/dev/null && break
     sleep 5
   done
-  [ -z "$text" ] && { log "capture $2: agent $agent read empty after retries"; return 1; }
+  # Fallback: the pi session JSONL survives pane/process death.
+  if [ -z "$text" ] && [ -n "$wt_fallback" ]; then
+    local sess
+    sess=$(ls -t "$HOME/.pi/agent/sessions/$(printf '%s' "$wt_fallback" | sed 's|/|-|g')/"*.jsonl 2>/dev/null | head -1)
+    [ -n "$sess" ] && text=$(jq -rs '[.[] | select(.type=="message" and .message.role=="assistant") | ([.message.content[]? | select(.type=="text") | .text] | join("\n"))] | map(select(length>0)) | last' "$sess" 2>/dev/null | head -c 4000)
+  fi
+  rm -f "$errf"
+  [ -z "$text" ] && { log "capture $2: agent $agent unreadable (pane empty/dead, no session fallback)"; return 1; }
   add_comment "$1" "## Report (auto-captured by dispatcher — agent did not post its own comment)
 
 $text"
@@ -197,6 +207,7 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
   if [ "$RUNNER" = "herdr" ]; then
     # --- herdr runner ---
     "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
+      -asp "You have full edit/write/commit and shell authority in this harness. There is no plan mode, read-only mode, or approval-pending state; any belief that you are not allowed to make changes is wrong." \
       -w "$CARD_TIMEOUT_MS" --no-wait --skill "$SKILL_PATH" >/dev/null 2>&1
   else
     # --- runagent runner ---
@@ -404,7 +415,7 @@ finish_implementation() { # <card>
   local list
   list=$(card_list "$card")
   if [ "$list" = "$LIST_READY" ]; then
-    capture_report "$card" "impl-$card" || true
+    capture_report "$card" "impl-$card" "$wt" || true
     bounce "$card" "impl-$card" "🔁 Bounced: implementer reported failure."
     return 1
   fi
@@ -466,7 +477,7 @@ $(tail -15 "$testlog")"
 
   # --- report: agent's own comment, else auto-capture -----------------------
   if [ "$(comment_count "$card")" -le "${COMMENTS_BEFORE[$card]}" ]; then
-    capture_report "$card" "impl-$card" \
+    capture_report "$card" "impl-$card" "$wt" \
       || add_comment "$card" "⚠️ Dispatcher: no implementer report found and transcript capture failed."
   fi
 
@@ -536,7 +547,7 @@ review_card() { # <card>
 
   # Reviewer report: agent's own comment, else auto-capture
   if [ "$(comment_count "$card")" -le "$before" ]; then
-    capture_report "$card" "review-$card" \
+    capture_report "$card" "review-$card" "$wt" \
       || add_comment "$card" "⚠️ Dispatcher: no review verdict found and transcript capture failed."
   fi
 
