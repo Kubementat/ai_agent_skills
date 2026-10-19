@@ -13,6 +13,8 @@
 #   dispatch.sh review      # only the AI-review phase
 #   dispatch.sh cleanup     # only worktree/branch cleanup for Done cards
 #   dispatch.sh status      # board overview
+#   dispatch.sh test-capture <worktree>  # self-test the session-JSONL capture
+#                                       # fallback (read-only, prints the text)
 #
 set -uo pipefail
 
@@ -21,6 +23,69 @@ PROMPT_DIR="$SCRIPT_DIR/prompts"
 SKILL_PATH="$(cd "$SCRIPT_DIR/../" && pwd)/SKILL.md"
 CONFIG=${PLANKA_DEVFLOW_CONFIG:-"$HOME/.config/planka-development-flow/config.env"}
 LOCKFILE="${TMPDIR:-/tmp}/planka-devflow.lock"
+
+# ---------------------------------------------------------------------------
+# pi session files — the durable transcript fallback used by capture_report.
+# Kept above the config load so `dispatch.sh test-capture` is a self-test that
+# works on a machine with no board configured (read-only: no plnk, no writes).
+# ---------------------------------------------------------------------------
+# pi names a session directory after the agent cwd: slashes become dashes and
+# the whole thing is wrapped in TWO dashes on each side, e.g.
+#   /workspace/worktrees/kwisatz/123 -> --workspace-worktrees-kwisatz-123--
+# (verified against `ls ~/.pi/agent/sessions/` on the host, 2026-10-19). The
+# single-leading-dash form people reach for first can never match.
+pi_session_dir() { # <worktree> — the session directory pi uses for this cwd
+  local p=${1%/}
+  [[ "$p" = /* ]] || p="$PWD/$p"
+  while [[ "$p" == *//* ]]; do p=${p//\/\//\/}; done
+  printf '%s/.pi/agent/sessions/-%s--\n' "${HOME%/}" "${p//\//-}"
+}
+
+latest_session_file() { # <worktree> — newest session JSONL (empty if none)
+  local dir
+  dir=$(pi_session_dir "$1")
+  ls -t "$dir"/*.jsonl 2>/dev/null | head -1
+}
+
+last_assistant_text() { # <jsonl> — last non-empty assistant text block
+  jq -rs '[.[]
+      | select(.type=="message" and .message.role=="assistant")
+      | ([.message.content[]? | select(.type=="text") | .text] | join("\n"))]
+      | map(select(length>0)) | last // ""' "$1" 2>/dev/null
+}
+
+cmd_test_capture() { # <worktree> — self-test: prove the fallback can extract text
+  local wt=${1:-}
+  if [ -z "$wt" ]; then
+    echo "usage: dispatch.sh test-capture <worktree>" >&2
+    return 2
+  fi
+  local dir sess text
+  dir=$(pi_session_dir "$wt")
+  if [ ! -d "$dir" ]; then
+    echo "FAIL: no pi session dir for worktree: $dir" >&2
+    return 1
+  fi
+  sess=$(latest_session_file "$wt")
+  if [ -z "$sess" ]; then
+    echo "FAIL: no session JSONL in $dir" >&2
+    return 1
+  fi
+  text=$(last_assistant_text "$sess")
+  if [ -z "$text" ]; then
+    echo "FAIL: no non-empty assistant text block in $sess" >&2
+    return 1
+  fi
+  echo "# session: $sess" >&2
+  printf '%s\n' "$text"
+  return 0
+}
+
+# `test-capture` needs no board config, no credentials and no lock.
+if [ "${1:-}" = "test-capture" ]; then
+  cmd_test_capture "${2:-}"
+  exit $?
+fi
 
 [ -f "$CONFIG" ] || { echo "ERROR: config not found: $CONFIG" >&2; exit 2; }
 # shellcheck disable=SC1090
@@ -97,6 +162,13 @@ fi
 : "${CARD_TIMEOUT:=3600}"
 : "${POLL_INTERVAL:=20}"
 : "${WT_ROOT:=$HOME/worktrees}"
+# Every agent launch writes its launcher stdout/stderr to $LAUNCH_LOG_DIR/
+# launch-<label>.log. Launch failures used to disappear into /dev/null.
+: "${LAUNCH_LOG_DIR:=$HOME/.config/planka-development-flow/launch-logs}"
+# How long to wait for the launched agent's herdr workspace to show up before
+# declaring the launch failed (fail-closed), and how often to look.
+: "${LAUNCH_VERIFY_TIMEOUT:=60}"
+: "${LAUNCH_VERIFY_INTERVAL:=2}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
@@ -147,6 +219,18 @@ agent_by_ws() { # <workspaceId> — first agent in this workspace that has a nam
     | jq -r --arg ws "$1" '(.result // .) | .agents[]? | select(.workspace_id==$ws) | .name // empty | select(. != "")' 2>/dev/null \
     | head -1
 }
+wait_for_workspace() { # <label> [timeout] — 0 once a workspace with this label exists
+  local label=$1 timeout=${2:-$LAUNCH_VERIFY_TIMEOUT}
+  local start now
+  start=$(date +%s)
+  while :; do
+    [ -n "$(ws_id_by_label "$label")" ] && return 0
+    now=$(date +%s)
+    [ $((now - start)) -ge "$timeout" ] && return 1
+    sleep "$LAUNCH_VERIFY_INTERVAL"
+  done
+}
+
 close_ws() { # <label>
   local ws
   ws=$(ws_id_by_label "$1")
@@ -175,8 +259,11 @@ capture_report() { # <card> <wsLabel> [worktree]
   # Fallback: the pi session JSONL survives pane/process death.
   if [ -z "$text" ] && [ -n "$wt_fallback" ]; then
     local sess
-    sess=$(ls -t "$HOME/.pi/agent/sessions/$(printf '%s' "$wt_fallback" | sed 's|/|-|g')/"*.jsonl 2>/dev/null | head -1)
-    [ -n "$sess" ] && text=$(jq -rs '[.[] | select(.type=="message" and .message.role=="assistant") | ([.message.content[]? | select(.type=="text") | .text] | join("\n"))] | map(select(length>0)) | last' "$sess" 2>/dev/null | head -c 4000)
+    sess=$(latest_session_file "$wt_fallback")
+    if [ -n "$sess" ]; then
+      text=$(last_assistant_text "$sess" | head -c 4000)
+      [ -n "$text" ] && log "capture $2: recovered from session file $sess"
+    fi
   fi
   rm -f "$errf"
   [ -z "$text" ] && { log "capture $2: agent $agent unreadable (pane empty/dead, no session fallback)"; return 1; }
@@ -188,27 +275,56 @@ $text"
 # ---------------------------------------------------------------------------
 # agent launch + wait
 # ---------------------------------------------------------------------------
+# Prompt rendering: pure bash substitution over placeholder/value pairs. There
+# is no external renderer and therefore no delimiter class to collide with — a
+# config value like PROJ_x_base_ref="origin/feat/migration" used to break the
+# old stream-editor renderer and silently produce an empty prompt (lesson 10).
+render_prompt() { # <promptFile> <placeholder> <value> [<placeholder> <value> ...]
+  local file=$1 content ph val pat
+  content=$(cat "$file") || return 1
+  shift
+  while [ $# -ge 2 ]; do
+    ph=$1; val=$2; shift 2
+    pat="__${ph}__"
+    # Both sides quoted: quoted pattern = literal match (no globbing), quoted
+    # value = literal text (bash >= 5.3 treats an unquoted & in the
+    # replacement as "the matched text", which would re-inject __TOKEN__).
+    content=${content//"$pat"/"$val"}
+  done
+  printf '%s' "$content"
+}
+
+launch_log_path() { # <label> — per-launch launcher log, created on demand
+  mkdir -p "$LAUNCH_LOG_DIR" 2>/dev/null || true
+  printf '%s/launch-%s.log\n' "$LAUNCH_LOG_DIR" "$1"
+}
+
 run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <reviewer?>
   local card=$1 label=$2 wt=$3 promptfile=$4 baseref=$5 model=$6 is_reviewer=${7:-false}
-  local prompt scratch_dir="" ro_bind_args=""
+  local prompt scratch_dir="" ro_bind_args="" logpath rc
 
-  prompt=$(sed \
-    -e "s|__CARD__|$card|g" \
-    -e "s|__BASE_REF__|$baseref|g" \
-    -e "s|__LIST_READY__|$LIST_READY|g" \
-    -e "s|__LIST_READY_REVIEW__|$LIST_READY_REVIEW|g" \
-    -e "s|__LIST_HUMAN_REVIEW__|$LIST_HUMAN_REVIEW|g" \
-    "$promptfile")
+  prompt=$(render_prompt "$promptfile" \
+    CARD "$card" \
+    BASE_REF "$baseref" \
+    LIST_READY "$LIST_READY" \
+    LIST_READY_REVIEW "$LIST_READY_REVIEW" \
+    LIST_HUMAN_REVIEW "$LIST_HUMAN_REVIEW")
   if [ -z "$prompt" ]; then
     add_comment "$card" "⛔ Dispatcher: prompt template render failed for $promptfile (empty prompt) — agent not launched."
     return 1
   fi
 
+  # Launcher stdout/stderr goes to a per-launch log, never to /dev/null: a
+  # failed launch has to leave evidence behind.
+  logpath=$(launch_log_path "$label")
+  echo "=== $(date '+%Y-%m-%d %H:%M:%S') launch $label (card $card, runner $RUNNER, model $model, cwd $wt)" >>"$logpath" 2>&1
+
   if [ "$RUNNER" = "herdr" ]; then
     # --- herdr runner ---
     "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
       -asp "You have full edit/write/commit and shell authority in this harness. There is no plan mode, read-only mode, or approval-pending state; any belief that you are not allowed to make changes is wrong." \
-      -w "$CARD_TIMEOUT_MS" --no-wait --skill "$SKILL_PATH" >/dev/null 2>&1
+      -w "$CARD_TIMEOUT_MS" --no-wait --skill "$SKILL_PATH" >>"$logpath" 2>&1
+    rc=$?
   else
     # --- runagent runner ---
     local profile="$AGENT_IMPL"
@@ -247,8 +363,19 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
 
     # shellcheck disable=SC2086
     "$RUNAGENT" "$profile" -p "$prompt" -c "$wt" --label "$label" --no-wait --keep \
-      $model_arg $ro_bind_args ${scratch_dir:+-c "$scratch_dir"} >/dev/null 2>&1
+      $model_arg $ro_bind_args ${scratch_dir:+-c "$scratch_dir"} >>"$logpath" 2>&1
+    rc=$?
   fi
+
+  # Fail-closed launch verification: the launcher returning is not evidence an
+  # agent exists. Poll for the workspace this launch was supposed to create.
+  if ! wait_for_workspace "$label"; then
+    log "launch $label: NO WORKSPACE after ${LAUNCH_VERIFY_TIMEOUT}s (launcher rc=$rc) — launch failed"
+    add_comment "$card" "⛔ Dispatcher: launch failed: no herdr workspace for $label; see $logpath"
+    return 1
+  fi
+  log "launch $label verified (log: $logpath)"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -505,17 +632,30 @@ phase_implement() {
     fi
   done
   [ ${#dispatched[@]} -eq 0 ] && return 0
-  log "launched ${#dispatched[@]} implementer(s): ${dispatched[*]}"
 
-  local p br
+  # Launch, then verify. Only agents whose herdr workspace actually appeared
+  # count as launched — the log line must never claim a failed launch.
+  local p br entry launched=() failed=()
+  local pids=()
   for c in "${dispatched[@]}"; do
     p=${PROJECT_OF[$c]}
     br=$(proj_base_ref "$p")
     run_agent "$c" "impl-$c" "$WT_ROOT/$p/$c" "$PROMPT_DIR/implementer.txt" "$br" "$MODEL_IMPL" &
+    pids+=("$!:$c")
   done
-  wait
+  for entry in "${pids[@]}"; do
+    if wait "${entry%%:*}"; then launched+=("${entry#*:}"); else failed+=("${entry#*:}"); fi
+  done
 
-  for c in "${dispatched[@]}"; do
+  [ ${#launched[@]} -gt 0 ] && log "launched ${#launched[@]} implementer(s): ${launched[*]}"
+  for c in "${failed[@]:-}"; do
+    [ -n "$c" ] || continue
+    log "card $c: implementer launch failed (see $LAUNCH_LOG_DIR/launch-impl-$c.log)"
+    bounce "$c" "impl-$c" "⛔ Dispatcher: implementer launch failed — no herdr workspace appeared for impl-$c (launcher log: $LAUNCH_LOG_DIR/launch-impl-$c.log)."
+  done
+
+  for c in "${launched[@]:-}"; do
+    [ -n "$c" ] || continue
     finish_implementation "$c" || true
   done
 }
@@ -537,7 +677,12 @@ review_card() { # <card>
   local before
   before=$(comment_count "$card")
 
-  run_agent "$card" "review-$card" "$wt" "$PROMPT_DIR/reviewer.txt" "$baseref" "$MODEL_REVIEW" true
+  if ! run_agent "$card" "review-$card" "$wt" "$PROMPT_DIR/reviewer.txt" "$baseref" "$MODEL_REVIEW" true; then
+    add_comment "$card" "⛔ Dispatcher: reviewer launch failed — returning to Ready for Review."
+    move_card "$card" "$LIST_READY_REVIEW"
+    close_ws "review-$card"
+    return 1
+  fi
   if ! wait_for_card "$card" "$LIST_AI_REVIEW" "" "review-$card" review; then
     add_comment "$card" "⛔ Dispatcher: review timed out after ${CARD_TIMEOUT}s — returning to Ready for Review."
     move_card "$card" "$LIST_READY_REVIEW"
@@ -636,7 +781,7 @@ main() {
     implement) phase_implement ;;
     review)    phase_review ;;
     cleanup)   phase_cleanup ;;
-    *) echo "usage: dispatch.sh {run|implement|review|cleanup|status}" >&2; return 2 ;;
+    *) echo "usage: dispatch.sh {run|implement|review|cleanup|status|test-capture <worktree>}" >&2; return 2 ;;
   esac
   log "dispatch run complete"
 }

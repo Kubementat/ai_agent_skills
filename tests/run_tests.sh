@@ -21,13 +21,14 @@ declare -A SUITE_FILES=(
     ["agent"]="$TESTS_DIR/test_install_agent.sh"
     ["ext"]="$TESTS_DIR/test_install_extension.sh"
     ["devflow"]="$TESTS_DIR/test_devflow_runner.sh"
+    ["devflow-launch"]="$TESTS_DIR/test_devflow_launch.sh"
 )
 
 # Decide which suites to run
 if [[ $# -gt 0 ]]; then
     SUITES=("$@")
 else
-    SUITES=("skill" "agent" "ext")
+    SUITES=("skill" "agent" "ext" "devflow-launch")
 fi
 
 OVERALL_PASS=0
@@ -37,7 +38,7 @@ SUITE_RESULTS=()
 for suite in "${SUITES[@]}"; do
     file="${SUITE_FILES[$suite]:-}"
     if [[ -z "$file" || ! -f "$file" ]]; then
-        echo -e "${_RED}Unknown suite: $suite${_NC}  (known: skill, agent, ext)"
+        echo -e "${_RED}Unknown suite: $suite${_NC}  (known: skill, agent, ext, devflow, devflow-launch)"
         exit 1
     fi
 
