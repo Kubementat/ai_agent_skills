@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "Hand-maintained overrides for the open-weights heuristic in scripts/aa.py.",
+    "The free Artificial Analysis tier exposes no open_weights flag, no context window",
+    "and no parameter counts, so aa.py classifies models with a curated family list",
+    "and this table. Order of precedence: exclude > include > family list.",
+    "params values are billions of parameters: total_b = all weights, active_b = per-token",
+    "active weights for MoE models. Update by hand when you verify a checkpoint on",
+    "Hugging Face; nothing here comes from the API."
+  ],
+  "_attribution": "Model metadata: artificialanalysis.ai (recorded 2026-10-19). Parameter counts verified against publisher/Hugging Face model cards.",
+  "include": [
+    "Tulu",
+    "Sarvam",
+    "INTELLECT",
+    "Solar Open",
+    "Exaone",
+    "OLMo",
+    "Apertus",
+    "LongCat",
+    "Magistral",
+    "GPT-OSS",
+    "DeepCoder",
+    "Arcee AI"
+  ],
+  "exclude": [
+    "Mistral Large",
+    "Mistral Medium",
+    "Omni Plus",
+    "Omni Flash",
+    "Command A",
+    "TRAIL"
+  ],
+  "params": {
+    "glm-4.5": { "total_b": 355, "active_b": 32 },
+    "glm-4-5-air": { "total_b": 106, "active_b": 12 },
+    "deepseek-r1-0120": { "total_b": 671, "active_b": 37 },
+    "deepseek-v3": { "total_b": 671, "active_b": 37 },
+    "deepseek-v3-1-reasoning": { "total_b": 671, "active_b": 37 },
+    "deepseek-v3-1-terminus-reasoning": { "total_b": 671, "active_b": 37 },
+    "phi-4-multimodal": { "total_b": 5.6, "active_b": 5.6 },
+    "gemma-3-27b": { "total_b": 27, "active_b": 27 },
+    "gemma-3-12b": { "total_b": 12, "active_b": 12 },
+    "mistral-7b-instruct": { "total_b": 7.3, "active_b": 7.3 },
+    "hermes-4-llama-3-1-70b": { "total_b": 70, "active_b": 70 },
+    "llama-3-3-nemotron-super-49b-reasoning": { "total_b": 49, "active_b": 12 }
+  }
+}
