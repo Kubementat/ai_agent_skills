@@ -123,6 +123,117 @@ comment_count() { # <card>
   plnk comment list --card "$1" --output json 2>/dev/null | jq -r '.data | length' 2>/dev/null || echo 0
 }
 
+# ---------------------------------------------------------------------------
+# durable verdict files — <worktree>/.dispatcher/STATUS.md (implementer) and
+# <worktree>/.dispatcher/REVIEW.md (reviewer)
+#
+# Agents write these files BEFORE moving the card. A terminal pane buffer is
+# the wrong transport for verdicts: the card move lands a beat before the
+# agent's process dies and `herdr agent read` can return nothing (incident
+# 2026-10-19, lessons 11/12). The dispatcher reads the file first; absence is
+# normal for agents that do not know the contract yet and must degrade
+# gracefully to today's pane capture — never hard-fail.
+# ---------------------------------------------------------------------------
+verdict_file_text() { # <path> -> file content on stdout; 1 if missing/empty
+  local f=$1 t
+  [ -f "$f" ] || return 1
+  t=$(head -c 6000 "$f" 2>/dev/null | tr -d '\r') || return 1
+  [ -n "${t//[[:space:]]/}" ] || return 1
+  printf '%s\n' "$t"
+}
+
+status_verdict_of() { # <text> -> DONE | FAILED | ""
+  local m
+  m=$(printf '%s\n' "$1" | head -5 | grep -oE 'STATUS:[[:space:]]*(DONE|FAILED)' | head -1)
+  [ -n "$m" ] || return 0
+  case "$m" in
+    *FAILED*) echo FAILED ;;
+    *) echo DONE ;;
+  esac
+}
+
+review_verdict_of() { # <text> -> APPROVE | CHANGES_REQUESTED | ""
+  local m
+  m=$(printf '%s\n' "$1" | head -5 | grep -oE 'VERDICT:[[:space:]]*(CHANGES[[:space:]_-]+REQUESTED|APPROVE)' | head -1)
+  [ -n "$m" ] || return 0
+  case "$m" in
+    *APPROVE*) echo APPROVE ;;
+    *) echo CHANGES_REQUESTED ;;
+  esac
+}
+
+verdict_line_of() { # <text> -> first 'VERDICT: ...' line, trimmed; "" if none
+  printf '%s\n' "$1" | grep -m1 -E '^[[:space:]]*VERDICT:' | head -1 \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# Freshness: a verdict file is only meaningful for the run that writes it. A
+# leftover file from an earlier attempt (a bounced implementation, a previous
+# review) must never be read as this run's verdict — an old REVIEW.md saying
+# APPROVE would stamp APPROVE on a review that produced nothing.
+clear_stale_verdict() { # <worktree> <impl|review>
+  local wt=${1:-} role=${2:-impl} f
+  [ -n "$wt" ] || return 0
+  case "$role" in
+    review) f="$wt/.dispatcher/REVIEW.md" ;;
+    *)      f="$wt/.dispatcher/STATUS.md" ;;
+  esac
+  [ -e "$f" ] && rm -f -- "$f"
+  return 0
+}
+
+# Report transport: durable verdict file wins, then the pane capture.
+post_report() { # <card> <wsLabel> <worktree> <fileText> <heading>
+  local card=$1 label=$2 wt=$3 text=$4 heading=$5
+  if [ -n "$text" ]; then
+    add_comment "$card" "## $heading
+
+$text"
+    return 0
+  fi
+  capture_report "$card" "$label" "$wt"
+}
+
+# Gate G3 input: changed files, minus pipeline scratch that must never be
+# committed or judged as scope (.dispatcher/ verdict files).
+scope_diff_files() { # <worktree> <baseRef>
+  git -C "$1" diff --name-only "$2..HEAD" 2>/dev/null | grep -v '^\.dispatcher/'
+  return 0
+}
+
+# Verdict file wins over card position when the two disagree; no file at all
+# reproduces today's position-only behaviour.
+impl_outcome() { # <listId> <statusVerdict> -> proceed | failed | unexpected
+  local list=$1 v=$2
+  case "$v" in
+    DONE)   echo proceed; return ;;
+    FAILED) echo failed;  return ;;
+  esac
+  case "$list" in
+    "$LIST_READY_REVIEW") echo proceed ;;
+    "$LIST_READY")        echo failed ;;
+    *)                    echo unexpected ;;
+  esac
+}
+
+review_outcome() { # <listId> <reviewVerdict> -> approve | changes | changes_mismatch | warn_missing | warn_mismatch | unexpected
+  local list=$1 v=$2
+  case "$list" in
+    "$LIST_HUMAN_REVIEW")
+      case "$v" in
+        "")      echo warn_missing ;;
+        APPROVE) echo approve ;;
+        *)       echo warn_mismatch ;;
+      esac ;;
+    "$LIST_READY")
+      case "$v" in
+        APPROVE) echo changes_mismatch ;;
+        *)       echo changes ;;
+      esac ;;
+    *) echo unexpected ;;
+  esac
+}
+
 proj_key() { # shell-safe key: non-alphanumeric -> _  (my-app -> my_app)
   echo "${1//[^a-zA-Z0-9]/_}"
 }
@@ -204,6 +315,14 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
     return 1
   fi
 
+  # Fresh verdict for a fresh run: drop whatever an earlier attempt left behind
+  # so the dispatcher can never read a stale verdict as this one's.
+  if [ "$is_reviewer" = true ]; then
+    clear_stale_verdict "$wt" review
+  else
+    clear_stale_verdict "$wt" impl
+  fi
+
   if [ "$RUNNER" = "herdr" ]; then
     # --- herdr runner ---
     "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
@@ -219,6 +338,12 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
       scratch_dir="$WT_ROOT/scratch/$card"
       mkdir -p "$scratch_dir"
       ro_bind_args="--ro-bind $wt"
+      # The reviewer is read-only for code but must still be able to write its
+      # durable verdict: bind $wt/.dispatcher back rw. agent_profile.py emits
+      # --ro-bind before --bind, so this nested bind overrides the ro worktree.
+      if mkdir -p "$wt/.dispatcher" 2>/dev/null; then
+        ro_bind_args="$ro_bind_args --bind $wt/.dispatcher"
+      fi
     fi
 
     # A linked git worktree's .git is a pointer file into the main repo's
@@ -412,17 +537,32 @@ finish_implementation() { # <card>
     return 1
   fi
 
-  local list
+  # --- verdict: durable file first, card position second ---------------------
+  local list sf sf_text sf_verdict outcome note
+  sf="$wt/.dispatcher/STATUS.md"
+  sf_text=$(verdict_file_text "$sf")
+  sf_verdict=$(status_verdict_of "$sf_text")
   list=$(card_list "$card")
-  if [ "$list" = "$LIST_READY" ]; then
-    capture_report "$card" "impl-$card" "$wt" || true
-    bounce "$card" "impl-$card" "🔁 Bounced: implementer reported failure."
+  outcome=$(impl_outcome "$list" "$sf_verdict")
+  note=""
+  [ -n "$sf_verdict" ] && note=" (verdict file: STATUS: $sf_verdict)"
+
+  if [ "$outcome" = "failed" ]; then
+    post_report "$card" "impl-$card" "$wt" "$sf_text" "Report from .dispatcher/STATUS.md (implementer)" || true
+    bounce "$card" "impl-$card" "🔁 Bounced: implementer reported failure.$note"
     return 1
   fi
-  if [ "$list" != "$LIST_READY_REVIEW" ]; then
+  if [ "$outcome" = "unexpected" ]; then
+    post_report "$card" "impl-$card" "$wt" "$sf_text" "Report from .dispatcher/STATUS.md (implementer)" || true
     add_comment "$card" "⚠️ Dispatcher: card in unexpected list after implementation."
     bounce "$card" "impl-$card" "⛔ Dispatcher: unexpected card state after implementation."
     return 1
+  fi
+  if [ "$list" != "$LIST_READY_REVIEW" ]; then
+    # Card position was ambiguous (unmoved / odd list) but the verdict file is
+    # explicit: trust the file, the hard gates below still apply.
+    add_comment "$card" "🧾 Dispatcher: card is not in Ready for Review but .dispatcher/STATUS.md says STATUS: DONE — trusting the verdict file (gates still apply)."
+    move_card "$card" "$LIST_READY_REVIEW"
   fi
 
   # --- G1: commits exist -------------------------------------------------
@@ -464,7 +604,7 @@ $(tail -15 "$testlog")"
         case "$f" in $p) soft_hits="$soft_hits $f"; break;; esac
       done
     fi
-  done < <(git -C "$wt" diff --name-only "$baseref..HEAD")
+  done < <(scope_diff_files "$wt" "$baseref")
 
   if [ -n "$hard_hits" ]; then
     add_comment "$card" "⛔ Gate G3 (hard) failed: diff touches protected files:$hard_hits"
@@ -475,9 +615,9 @@ $(tail -15 "$testlog")"
     add_comment "$card" "⚠️ Gate G3 (soft): diff touches files that default to do-not-touch:$soft_hits — human review attention required."
   fi
 
-  # --- report: agent's own comment, else auto-capture -----------------------
+  # --- report: verdict file, agent's own comment, else auto-capture ---------
   if [ "$(comment_count "$card")" -le "${COMMENTS_BEFORE[$card]}" ]; then
-    capture_report "$card" "impl-$card" "$wt" \
+    post_report "$card" "impl-$card" "$wt" "$sf_text" "Report from .dispatcher/STATUS.md (implementer)" \
       || add_comment "$card" "⚠️ Dispatcher: no implementer report found and transcript capture failed."
   fi
 
@@ -545,18 +685,46 @@ review_card() { # <card>
     return 1
   fi
 
-  # Reviewer report: agent's own comment, else auto-capture
+  # --- verdict: durable file first, card position second ---------------------
+  # No APPROVE stamp without a REVIEW.md that actually says APPROVE: a card
+  # position alone carries zero report content for the human (incident
+  # 2026-10-19).
+  local list rf rf_text rf_verdict rf_line outcome note
+  list=$(card_list "$card")
+  rf="$wt/.dispatcher/REVIEW.md"
+  rf_text=$(verdict_file_text "$rf")
+  rf_verdict=$(review_verdict_of "$rf_text")
+  rf_line=$(verdict_line_of "$rf_text")
+  note=""
+  [ -n "$rf_line" ] && note=" (verdict file: $rf_line)"
+
+  # Reviewer report: verdict file, agent's own comment, else auto-capture
   if [ "$(comment_count "$card")" -le "$before" ]; then
-    capture_report "$card" "review-$card" "$wt" \
+    post_report "$card" "review-$card" "$wt" "$rf_text" "Review report from .dispatcher/REVIEW.md (AI reviewer)" \
       || add_comment "$card" "⚠️ Dispatcher: no review verdict found and transcript capture failed."
   fi
 
-  local list
-  list=$(card_list "$card")
-  case "$list" in
-    "$LIST_HUMAN_REVIEW") add_comment "$card" "✅ AI review: APPROVE — awaiting human review." ;;
-    "$LIST_READY")        add_comment "$card" "🔁 AI review: CHANGES REQUESTED — back to Ready for re-implementation." ;;
-    *)                    add_comment "$card" "⚠️ Dispatcher: unexpected list after AI review." ;;
+  outcome=$(review_outcome "$list" "$rf_verdict")
+  case "$outcome" in
+    approve)  add_comment "$card" "✅ AI review: APPROVE — awaiting human review.$note" ;;
+    changes)  add_comment "$card" "🔁 AI review: CHANGES REQUESTED — back to Ready for re-implementation.$note" ;;
+    changes_mismatch)
+      add_comment "$card" "🔁 AI review: CHANGES REQUESTED — back to Ready for re-implementation. ⚠️ Verdict file says '$rf_line' but the card is in Ready — trusting the card position."
+      log "card $card: verdict file mismatch (file=$rf_verdict list=Ready) — kept CHANGES REQUESTED"
+      ;;
+    warn_missing)
+      add_comment "$card" "⚠️ Dispatcher: card moved to Human Review but verdict file missing — human: check transcript"
+      close_ws "review-$card"
+      log "card $card: in Human Review with no $rf — APPROVE not stamped"
+      return 1
+      ;;
+    warn_mismatch)
+      add_comment "$card" "⚠️ Dispatcher: card moved to Human Review but verdict file says '$rf_line' — APPROVE not stamped; human: check transcript"
+      close_ws "review-$card"
+      log "card $card: verdict file mismatch (file=$rf_verdict list=Human Review) — APPROVE not stamped"
+      return 1
+      ;;
+    *)        add_comment "$card" "⚠️ Dispatcher: unexpected list after AI review." ;;
   esac
   close_ws "review-$card"
   log "card $card: review done (now in list $list)"
@@ -595,6 +763,11 @@ phase_cleanup() {
     wt="$WT_ROOT/$p/$c"
     if [ -d "$wt" ]; then
       git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 && log "removed worktree $wt"
+    fi
+    # Durable verdict files are untracked pipeline scratch: drop whatever the
+    # worktree removal did not take with it (never committed, never reviewed).
+    if [ -d "$wt/.dispatcher" ]; then
+      rm -rf -- "$wt/.dispatcher" && log "removed verdict dir $wt/.dispatcher"
     fi
     git -C "$repo" branch -D "ai/$c" >/dev/null 2>&1 && log "deleted branch ai/$c"
   done < <(plnk card list --list "$LIST_DONE" --output json 2>/dev/null | jq -r '.data[].id')
@@ -641,4 +814,8 @@ main() {
   log "dispatch run complete"
 }
 
-main "$@"
+# Only start a run when executed directly; tests source this file to exercise
+# the pure helpers (verdict files, gate decisions) without touching Planka.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
