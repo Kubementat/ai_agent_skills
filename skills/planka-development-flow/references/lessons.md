@@ -69,3 +69,17 @@ the transcript and completes the move from deterministic evidence (`VERDICT:`
 line for reviews, `STATUS:` marker / commit count for implementations). The
 gates remain the authority — the rescue only supplies the move.
 **Rule: never make the pipeline wait on an agent that has stopped.
+
+## 9. Cron deploys lose plnk auth and PATH (2026-10-19, host integration)
+
+`plnk` does not auto-load `~/.config/plnk/credentials.env` — it only reads
+`PLANKA_SERVER`/`PLANKA_TOKEN` from the environment (or flags). Under cron's
+bare env every call returns `success:false`, so `.data` is null and the
+dispatcher's jq pipes emit `Cannot iterate over null` while every phase
+silently sees zero cards — a fully broken pipeline that looks idle. Cron's
+PATH also lacks `~/.local/bin` where `plnk` and `herdr` live.
+**Rule: in any non-interactive deployment (cron/systemd), add to config.env:
+`. "$HOME/.config/plnk/credentials.env"; export PLANKA_SERVER PLANKA_TOKEN`
+and set a crontab `PATH=` line including `~/.local/bin`. Verify with
+`env -i HOME=$HOME PATH=/home/ubuntu/.local/bin:/usr/bin:/bin dispatch.sh run`
+— zero jq errors is the green light, not exit code 0.
