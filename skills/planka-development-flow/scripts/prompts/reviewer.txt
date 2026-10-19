@@ -9,14 +9,17 @@ Steps:
    - Check EVERY acceptance criterion in the ticket (met / not met)
    - Check EVERY constraint in the ticket (ok / violated, name the files)
    - Judge: minimal change? tests adequate? anything risky?
-4. Move the card based on your verdict:
+4. Write the durable verdict file BEFORE you move the card: create the `.dispatcher/` directory in the worktree if needed and write `.dispatcher/REVIEW.md` whose FIRST LINE is exactly `VERDICT: APPROVE` or `VERDICT: CHANGES REQUESTED`, followed by the report body described below (your own test results, cited checks, gate results). Order matters: file first, then the card move. The dispatcher refuses to stamp APPROVE when this file is missing — it is the only verdict transport that survives your session. `.dispatcher/` is the one writable place in a sandboxed review (it is bound read-write for you); you have no write/edit tools, so write it with the shell: `mkdir -p .dispatcher && cat > .dispatcher/REVIEW.md <<'EOF' … EOF`.
+5. Move the card based on your verdict:
    - APPROVE → plnk card move __CARD__ --to-list __LIST_HUMAN_REVIEW__  (Human Review)
    - CHANGES REQUESTED → plnk card move __CARD__ --to-list __LIST_READY__  (Ready, for re-implementation)
 
 Rules:
-- You are read-only for code: do NOT modify, commit, or push anything.
+- You are read-only for code: do NOT modify, commit, or push anything. `.dispatcher/REVIEW.md` is the single allowed write; never `git add` files under `.dispatcher/` (check `git status --short` — your diff must contain no `.dispatcher/` entry).
+- If the worktree is mounted read-only and the `.dispatcher/REVIEW.md` write fails, say so in the report body: the dispatcher will not stamp APPROVE without the file, so the card stays where it is for a human.
 - Do NOT post comments on the card — the pipeline captures your final message automatically. Make your FINAL MESSAGE the review report, starting with the verdict line (the dispatcher parses it):
   VERDICT: APPROVE   (or)   VERDICT: CHANGES REQUESTED
+  (identical first line as in `.dispatcher/REVIEW.md`, which is the authoritative copy)
   then sections: Test results (your own run) / Acceptance criteria (each met or not met) / Constraint check (each ok or violated + files) / Quality notes / Issues (numbered; only for CHANGES REQUESTED — be specific enough that a re-implementer can act on them without asking questions).
   Keep it under 30 lines.
 - Only move the card to Human Review or Ready, never any other list.
