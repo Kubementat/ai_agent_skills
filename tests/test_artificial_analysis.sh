@@ -201,6 +201,19 @@ assert_contains  "explains offline mode"    "$_OUT" "No fixture"
 run_aa --fixture-dir "$FIXTURES" raw ../secrets
 assert_exit_code "path traversal refused"   "$_RC" "2"
 
+# --param must reach the fixture lookup (regression: NameError on 'params').
+run_aa --fixture-dir "$FIXTURES" raw language/models/free --param page=1
+assert_exit_code "--param page=1 exits 0"      "$_RC" "0"
+assert_contains  "--param replays page 1"      "$_OUT" "\"page\": 1"
+
+run_aa --fixture-dir "$FIXTURES" raw language/models/free --param page=4
+assert_exit_code "--param page=4 exits 0"      "$_RC" "0"
+assert_contains  "--param replays last page"   "$_OUT" "\"has_more\": false"
+
+run_aa --fixture-dir "$FIXTURES" raw language/models/free
+assert_exit_code "no page param is a clear error" "$_RC" "2"
+assert_contains  "error names the missing path"   "$_OUT" "No fixture"
+
 # ─── 7. cache TTL + transport injection ───────────────────────────────────────
 describe "aa.py cache TTL (module import with stubbed transport)"
 

@@ -173,7 +173,7 @@ class FixtureTransport:
             raise ConfigError("Fixture directory not found: %s" % self.dir)
 
     def get(self, path, params):
-        for name in self._candidate_names(path):
+        for name in self._candidate_names(path, params):
             candidate = self.dir / name
             if candidate.is_file():
                 try:
@@ -201,7 +201,7 @@ class FixtureTransport:
     }
 
     @staticmethod
-    def _candidate_names(path):
+    def _candidate_names(path, params=None):
         clean = path.strip("/")
         flat = re.sub(r"[^a-z0-9]+", "_", clean.lower()).strip("_")
         names = ["%s.json" % flat]
