@@ -177,6 +177,9 @@ and errors like:
   - use `comment list --card <cardId>`
   - use `label list --board <boardId>`
   - or use `card snapshot` / `board snapshot`
+- Card title is `name` in all JSON output (the `--title` flag is input-only), and card
+  description is hidden from `card get`/`card list` — `card create --description` can even drop
+  the body silently. Verify descriptions with `card snapshot`. See `references/api-quirks.md`.
 - Snapshot commands are best when nested state is needed in one call:
   - `plnk project snapshot <projectId> --output json`
   - `plnk board snapshot <boardId> --output json`

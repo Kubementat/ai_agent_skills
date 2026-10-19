@@ -125,6 +125,31 @@ Planka uses `X-API-Key` header, not `Authorization: Bearer`. The CLI handles thi
 
 For performance, prefer the narrowest scope possible.
 
+## Card description is invisible in `get`/`list` — and `create --description` can silently drop it
+
+`card get` and `card list` return only `{id, isClosed, listId, name, position}` — the
+`description` field is never shown, so a missing body is undetectable there. Worse,
+`card create --description` can silently drop the body while returning success.
+
+**Always verify a description after create or update via the card snapshot, and repair with
+`card update --description @file`:**
+
+```bash
+plnk card snapshot <cardId> --output json | jq '.data.description | length'   # expect > 0
+plnk card update <cardId> --description @body.md --output json
+```
+
+A card whose body never landed looks fine on the board but starves downstream automation that
+reads the description — verify early, not after a failure.
+
+## Card title lives in `name`, not `title`
+
+Cards carry the title under `name` in every JSON response (`card get`, `card list`, board
+snapshot); the `--title` flag exists only on input. When piping card JSON through jq, use
+`.name` — reading `.title` yields silent `null`s. List-shaped responses are plain arrays under
+`.data`, so iterate `.data[]` directly (a `.data.cards // .data` fallback fails outright on an
+array, since jq errors on indexing an array instead of falling through).
+
 ## Empty collections
 
 Empty collections are valid responses, not errors:

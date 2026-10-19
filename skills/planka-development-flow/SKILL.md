@@ -59,6 +59,16 @@ $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticke
 */30 * * * * <path to this skill>/scripts/dispatch.sh run >> ~/.config/planka-development-flow/dispatch.log 2>&1
 ```
 
+**Reading the board beyond `status`** — the config defines `LIST_*` variables
+(there is no `BOARD_ID`); card list JSON is a plain `.data` array and the card
+title lives in `.name`, not `.title`:
+
+```bash
+source ~/.config/planka-development-flow/config.env
+plnk card list --list "$LIST_HUMAN_REVIEW" --output json | jq -r '.data[] | "\(.id)  \(.name)"'
+plnk comment list --card <cardId> --output json | jq -r '.data | sort_by(.createdAt) | .[] | "---- \(.createdAt)\n\(.text)"'
+```
+
 ## Creating tickets
 
 1. Write the ticket as markdown following the format contract:
@@ -66,6 +76,11 @@ $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticke
 2. `new-card.sh --title "..." --project <name> --desc file.md [--list inbox|ready]`
    — creates the card, adopts the `Dispatch` field group, sets the `project` field.
 3. Tickets in **Ready** are the gate: only cards you put there get worked.
+4. **Verify the description actually landed** with `plnk card snapshot <id>`
+   (`card get` never shows it; `card create --description` can drop it silently).
+   A title-only card burns all its attempts before anyone notices — implementers
+   fail with no usable spec. If the body is missing: `plnk card update <id>
+   --description @file`, reset the `attempts` field, return the card to Ready.
 
 `project` field values must match a `PROJ_<name>_repo` key in the config
 (see below). Cards with unknown projects are skipped (not bounced).
@@ -138,7 +153,25 @@ transcript's verdict/status marker or the commit evidence (gates still apply).
   failed is named in the bounce comment (`G1`/`G2`/`G3`).
 - `no eligible cards` but there are cards in Ready → check the `project` field
   value matches a config key, and `attempts` < `MAX_ATTEMPTS`.
-- Log file for cron runs: `~/.config/planka-development-flow/dispatch.log`
+- **G2 fails on a suite the change did not touch** → run the exact gate command
+  in a clean checkout of `base_ref` BEFORE re-dispatching: a pre-existing failure
+  on main bounces every card regardless of content. Fix it inside the same ticket
+  — amend the ticket body to explicitly authorize the minimal test change under
+  Constraints. Do NOT file a separate fix ticket to wait on: worktree branches are
+  not rebased onto a merged fix between attempts, so the gate keeps failing.
+- Testing the branch while its card is in flight (live probes, manual runs) and
+  finding defects → post them as an imperative card comment with exact repro
+  commands AND amend the ticket body if the fix is required — re-dispatched
+  implementers and reviewers read comments, but only the body is the contract.
+- **Never run `dispatch.sh run` in a foreground terminal call** — a Hermes terminal timeout kills the script mid-poll: the launched herdr agent survives but the in-process rescue/gate logic dies, orphaning the In Progress card (the next cron run ignores it; `phase_implement` only reads Ready). Correct pattern: `run` in background with notify, OR after launching, attach your own watcher: poll `plnk card get` listId + `herdr agent list` status; if the agent ends idle without moving the card, apply rescue manually from STATUS.md verdict / commit evidence (gates still apply).
+- Recovering a lost review verdict: the reviewer's pi session JSONL survives capture failure — find it under `~/.pi/agent/sessions/--workspace-worktrees-<project>-<cardId>--/*.jsonl` by mtime window, then `jq -r 'select(.type=="message") | select(.message.role=="assistant") | .message.content[]? | select(.type=="text") | .text' <file> | tail -60`. Post the recovered findings as an operator card comment ASAP — bounces with no findings send implementers hunting phantom issues.
+- `plnk` auth is NOT in a credential store — every fresh shell needs `set -a; source ~/.config/planka-development-flow/config.env; set +a`, otherwise calls return `success:false / AuthenticationFailed`. Field values: `plnk card field list <card>` (`.data[] | .customFieldId/.content`). Review-phase CHANGES bounces do NOT increment `attempts` (only gate bounces do).
+- Log file for cron runs: `~/.config/planka-development-flow/dispatch.log` —
+  only cron appends there; a manual `dispatch.sh run` logs to stdout. So a card
+  in `In Progress` (or a live herdr agent whose worktree cwd contains the card
+  id) with no `launched` line in the log usually means a hand-run dispatch or an
+  operator-reset Rejected card, not corruption. Card comments are the ground
+  truth: operator notes and `🚀 Dispatched` entries land there, not in the log.
 
 ## Extending
 
