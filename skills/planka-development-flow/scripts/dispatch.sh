@@ -235,8 +235,12 @@ review_verdict_of() { # <text> -> APPROVE | CHANGES_REQUESTED | ""
 }
 
 verdict_line_of() { # <text> -> first 'VERDICT: ...' line, trimmed; "" if none
-  printf '%s\n' "$1" | grep -m1 -E '^[[:space:]]*VERDICT:' | head -1 \
-    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+  # Pure-bash trim (1/6 rule: no sed in dispatch.sh).
+  local line
+  line=$(printf '%s\n' "$1" | grep -m1 -E '^[[:space:]]*VERDICT:' | head -1)
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  printf '%s\n' "$line"
 }
 
 # Freshness: a verdict file is only meaningful for the run that writes it. A
