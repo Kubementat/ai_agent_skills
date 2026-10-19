@@ -83,3 +83,16 @@ PATH also lacks `~/.local/bin` where `plnk` and `herdr` live.
 and set a crontab `PATH=` line including `~/.local/bin`. Verify with
 `env -i HOME=$HOME PATH=/home/ubuntu/.local/bin:/usr/bin:/bin dispatch.sh run`
 — zero jq errors is the green light, not exit code 0.
+
+## 10. sed placeholder rendering breaks on slash-bearing values (2026-10-19, kwisatz card)
+
+`run_agent()` renders agent prompts via `sed -e "s/__TOKEN__/$val/g"`. A
+config value containing `/` (e.g. `PROJ_x_base_ref="origin/feat/pyinfra-migration"`)
+terminates the s-command early: `sed: unknown option to 's'` → empty prompt →
+herdr agent launched with no instructions (output sent to /dev/null, so silent)
+→ card burns its attempt and times out an hour later.
+**Rule: interpolate untrusted values into sed with a delimiter unlikely to
+occur in them — `s|__TOKEN__|$val|g` — and refuse to launch on an empty
+rendered prompt (guard added in dispatch.sh 2026-10-19). When a dispatch run
+logs "launched" but `herdr workspace list` shows no new `impl-*` workspace
+within a minute, suspect this class of silent launch failure.**

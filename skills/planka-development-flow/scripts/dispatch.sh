@@ -183,12 +183,16 @@ run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <revi
   local prompt scratch_dir="" ro_bind_args=""
 
   prompt=$(sed \
-    -e "s/__CARD__/$card/g" \
-    -e "s/__BASE_REF__/$baseref/g" \
-    -e "s/__LIST_READY__/$LIST_READY/g" \
-    -e "s/__LIST_READY_REVIEW__/$LIST_READY_REVIEW/g" \
-    -e "s/__LIST_HUMAN_REVIEW__/$LIST_HUMAN_REVIEW/g" \
+    -e "s|__CARD__|$card|g" \
+    -e "s|__BASE_REF__|$baseref|g" \
+    -e "s|__LIST_READY__|$LIST_READY|g" \
+    -e "s|__LIST_READY_REVIEW__|$LIST_READY_REVIEW|g" \
+    -e "s|__LIST_HUMAN_REVIEW__|$LIST_HUMAN_REVIEW|g" \
     "$promptfile")
+  if [ -z "$prompt" ]; then
+    add_comment "$card" "⛔ Dispatcher: prompt template render failed for $promptfile (empty prompt) — agent not launched."
+    return 1
+  fi
 
   if [ "$RUNNER" = "herdr" ]; then
     # --- herdr runner ---
