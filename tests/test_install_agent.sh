@@ -8,7 +8,8 @@ source "$REPO_ROOT/tests/test_framework.sh"
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
 # Pick two real agents from agents/pi/
-mapfile -t _ALL_AGENTS < <(find "$REPO_ROOT/agents/pi" -maxdepth 1 -name "*.md" | xargs -I{} basename {} .md | sort)
+# *.chain.md are legacy chain definitions; install-agent.sh skips them by design.
+mapfile -t _ALL_AGENTS < <(find "$REPO_ROOT/agents/pi" -maxdepth 1 -name "*.md" ! -name "*.chain.md" | xargs -I{} basename {} .md | sort)
 AGENT_A="${_ALL_AGENTS[0]}"
 AGENT_B="${_ALL_AGENTS[1]}"
 
