@@ -1,0 +1,153 @@
+{
+  "tier": "free",
+  "intelligence_index_version": 4.3,
+  "pagination": {
+    "page": 4,
+    "page_size": 200,
+    "total_pages": 4,
+    "has_more": false
+  },
+  "data": [
+    {
+      "id": "f0083258-8646-45b8-8082-7aaf6c2ea82a",
+      "name": "gpt-oss-120b (High)",
+      "slug": "gpt-oss-120b",
+      "release_date": "2025-08-05",
+      "model_creator": {
+        "id": "e67e56e3-15cd-43db-b679-da4660a69f41",
+        "name": "OpenAI"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 11.6,
+        "artificial_analysis_coding_index": 30.4,
+        "artificial_analysis_agentic_index": 3.7,
+        "artificial_analysis_finance_and_accounting_index": 12.2,
+        "artificial_analysis_strategy_and_ops_index": 7.9,
+        "artificial_analysis_legal_index": 11.3,
+        "artificial_analysis_healthcare_and_medical_index": 10.7,
+        "artificial_analysis_engineering_index": 15.1,
+        "artificial_analysis_economics_index": 18.3
+      },
+      "artificial_analysis_intelligence_index_cost": {
+        "total_cost": 110.26,
+        "cost_per_task": {
+          "total_cost": 0.0922
+        }
+      },
+      "pricing": {
+        "price_1m_input_tokens": 0.125,
+        "price_1m_output_tokens": 0.595,
+        "price_1m_cache_hit_tokens": 0.095,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 265.01,
+        "median_time_to_first_token_seconds": 0.82,
+        "median_time_to_first_answer_token_seconds": 8.37,
+        "median_end_to_end_response_time_seconds": 10.26
+      }
+    },
+    {
+      "id": "f73f4711-9c61-40a7-a258-b71c14727f53",
+      "name": "Llama 3.1 Tulu3 405B",
+      "slug": "tulu3-405b",
+      "release_date": "2025-01-30",
+      "model_creator": {
+        "id": "ab6c5270-d7b9-4c09-92fe-62662618c631",
+        "name": "Allen Institute for AI"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 7.2,
+        "artificial_analysis_coding_index": null,
+        "artificial_analysis_agentic_index": null,
+        "artificial_analysis_finance_and_accounting_index": null,
+        "artificial_analysis_strategy_and_ops_index": null,
+        "artificial_analysis_legal_index": null,
+        "artificial_analysis_healthcare_and_medical_index": null,
+        "artificial_analysis_engineering_index": null,
+        "artificial_analysis_economics_index": null
+      },
+      "artificial_analysis_intelligence_index_cost": null,
+      "pricing": {
+        "price_1m_input_tokens": null,
+        "price_1m_output_tokens": null,
+        "price_1m_cache_hit_tokens": null,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": null,
+        "median_time_to_first_token_seconds": null,
+        "median_time_to_first_answer_token_seconds": null,
+        "median_end_to_end_response_time_seconds": null
+      }
+    },
+    {
+      "id": "d621247c-d47e-458c-82cb-a166bc3b37e5",
+      "name": "DeepSeek V3.2 (Reasoning)",
+      "slug": "deepseek-v3-2-reasoning",
+      "release_date": "2025-12-01",
+      "model_creator": {
+        "id": "58b835bf-4c87-4f87-a846-df4b692c6e7d",
+        "name": "DeepSeek"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 21.5,
+        "artificial_analysis_coding_index": 44.2,
+        "artificial_analysis_agentic_index": null,
+        "artificial_analysis_finance_and_accounting_index": null,
+        "artificial_analysis_strategy_and_ops_index": null,
+        "artificial_analysis_legal_index": null,
+        "artificial_analysis_healthcare_and_medical_index": null,
+        "artificial_analysis_engineering_index": null,
+        "artificial_analysis_economics_index": null
+      },
+      "artificial_analysis_intelligence_index_cost": null,
+      "pricing": {
+        "price_1m_input_tokens": 0.28,
+        "price_1m_output_tokens": 0.42,
+        "price_1m_cache_hit_tokens": 0.014,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": null,
+        "median_time_to_first_token_seconds": null,
+        "median_time_to_first_answer_token_seconds": null,
+        "median_end_to_end_response_time_seconds": null
+      }
+    },
+    {
+      "id": "feb02d3b-ff8d-4ed4-b165-13f8d4a7192c",
+      "name": "Gemma 4 12B (Reasoning)",
+      "slug": "gemma-4-12b",
+      "release_date": "2026-06-03",
+      "model_creator": {
+        "id": "faddc6d9-2c14-445f-9b28-56726f59c793",
+        "name": "Google"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 14.2,
+        "artificial_analysis_coding_index": 31,
+        "artificial_analysis_agentic_index": null,
+        "artificial_analysis_finance_and_accounting_index": null,
+        "artificial_analysis_strategy_and_ops_index": null,
+        "artificial_analysis_legal_index": null,
+        "artificial_analysis_healthcare_and_medical_index": null,
+        "artificial_analysis_engineering_index": null,
+        "artificial_analysis_economics_index": null
+      },
+      "artificial_analysis_intelligence_index_cost": null,
+      "pricing": {
+        "price_1m_input_tokens": 0.1,
+        "price_1m_output_tokens": 0.3,
+        "price_1m_cache_hit_tokens": null,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 115.02,
+        "median_time_to_first_token_seconds": 2.24,
+        "median_time_to_first_answer_token_seconds": 19.63,
+        "median_end_to_end_response_time_seconds": 23.98
+      }
+    }
+  ]
+}
