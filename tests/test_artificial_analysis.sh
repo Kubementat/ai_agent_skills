@@ -165,6 +165,13 @@ assert_contains  "lists too-large Qwen3 235B"       "$_OUT" "Qwen3 235B A22B 250
 assert_eq        "235B model does not fit (no)"     "$(fits_of "$_OUT" "Qwen3 235B A22B 2507")" "no"
 assert_eq        "397B model does not fit (no)"     "$(fits_of "$_OUT" "Qwen3.5 397B A17B")" "no"
 assert_eq        "9B model fits (yes)"              "$(fits_of "$_OUT" "Qwen3.5 9B")" "yes"
+# T-unit and version-decimal regressions (live-data names, recorded in the fixtures)
+assert_contains  "lists the 2.4T model"                       "$_OUT" "Qwen3.8 2.4T A95B"
+assert_contains  "2.4T counts as 2400B total"                 "$_OUT" "2400.0"
+assert_eq        "2.4T model cannot fit (no)"                 "$(fits_of "$_OUT" "Qwen3.8 2.4T")" "no"
+assert_contains  "lists Nemotron 3.5 Bolt 74B-A9B"            "$_OUT" "Nemotron 3.5 Bolt 74B-A9B"
+assert_eq        "74B-A9B fits (yes), version 3.5 ignored"    "$(fits_of "$_OUT" "Nemotron 3.5 Bolt")" "yes"
+assert_contains  "74B-A9B estimate is 46.4 GB (74B total)"    "$_OUT" "46.4"
 assert_not_contains "excludes closed Claude"        "$_OUT" "Claude Opus 5.5"
 assert_not_contains "excludes closed GPT"           "$_OUT" "GPT-6 Astra"
 assert_not_contains "excludes closed Gemini"        "$_OUT" "Gemini 2.5 Pro"
@@ -173,6 +180,11 @@ assert_contains  "states it is an estimate"         "$_OUT" "Estimate only"
 assert_contains  "mentions KV cache caveat"         "$_OUT" "KV cache"
 assert_contains  "counts excluded closed models"    "$_OUT" "closed-weight model(s) excluded"
 assert_contains  "prints attribution"               "$_OUT" "Data: artificialanalysis.ai"
+
+run_aa --fixture-dir "$FIXTURES" open-weights --ram 120 --quant q4_k_m --json
+assert_exit_code "--json open-weights exits 0"    "$_RC" "0"
+assert_contains  "json total for 2.4T is 2400"    "$_OUT" '"total_params_b": 2400.0'
+assert_contains  "json active for 2.4T is 95"     "$_OUT" '"active_params_b": 95.0'
 
 run_aa --fixture-dir "$FIXTURES" open-weights --ram 120 --quant fp16
 assert_exit_code "fp16 exits 0"                     "$_RC" "0"
@@ -185,6 +197,65 @@ assert_contains  "unknown params marked unknown"    "$_OUT" "unknown"
 
 run_aa --fixture-dir "$FIXTURES" open-weights --limit 200
 assert_not_contains "without --all unknown-param models are excluded" "$_OUT" "Kimi K2.6 (Reasoning)"
+
+# ─── 5b. parse_params unit tests (module import, no network, no cache) ────────
+describe "aa.py parse_params (unit)"
+
+PARAMS_OUT=$(env -u AA_API_KEY python3 - "$AA" <<'PY'
+"""Unit tests for the model-name parameter parser. Total/active in billions."""
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("aa", sys.argv[1])
+aa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(aa)
+
+CASES = [
+    # "T" is trillion: the total is 2400B, never the A95B active tail.
+    ("Qwen3.8 2.4T A95B", 2400.0, 95.0),
+    ("Qwen3.8 2.4T", 2400.0, 2400.0),
+    ("Nemotron 3 Ultra 1T", 1000.0, 1000.0),
+    # A version decimal is not a size; the size is glued to B next to -A<NN>B.
+    ("Nemotron 3.5 Bolt 74B-A9B", 74.0, 9.0),
+    ("Nemotron 3.5 Lightning", None, None),
+    # Regression: MoE naming with a space instead of a dash.
+    ("Qwen3.5 397B A17B (Reasoning)", 397.0, 17.0),
+    ("Qwen3 235B A22B 2507 Instruct", 235.0, 22.0),
+    ("Qwen3-235B-A22B", 235.0, 22.0),
+    ("NVIDIA Nemotron 3 Nano 30B A3B (Reasoning)", 30.0, 3.0),
+    ("Qwen3-Next-80B-A3B-Instruct", 80.0, 3.0),
+    # Plain dense sizes, lower case included.
+    ("gpt-oss-120b (High)", 120.0, 120.0),
+    ("Gemma 3 27B Instruct", 27.0, 27.0),
+    ("Llama 3.1 Tulu3 405B", 405.0, 405.0),
+    # No confident size in the name -> unknown, which open-weights excludes unless --all.
+    ("GLM-4.5 (Reasoning)", None, None),
+    ("Kimi K2.6 (Reasoning)", None, None),
+    ("DeepSeek R1 (Jan '25)", None, None),
+    ("Claude Opus 5.5 (Max, Default Fallback)", None, None),
+    ("GPT-6 Astra (Xhigh)", None, None),
+    ("Mistral 8x22B", None, None),
+    ("Gemma 3n E4B Instruct", None, None),
+    # Contradictory naming (active > total) must not be trusted as a small model.
+    ("Weird 4B-A12B", None, None),
+]
+
+failures = []
+for name, total, active in CASES:
+    got = aa.parse_params(name)
+    ok = got == (total, active)
+    print("%-4s %s -> %r" % ("PASS" if ok else "FAIL", name, got))
+    if not ok:
+        failures.append(name)
+print("SUMMARY failures=%d" % len(failures))
+sys.exit(1 if failures else 0)
+PY
+)
+PARAMS_RC=$?
+echo "$PARAMS_OUT" | sed 's/^/    /'
+assert_exit_code "parse_params cases all pass" "$PARAMS_RC" "0"
+assert_contains "no parser failures"            "$PARAMS_OUT" "SUMMARY failures=0"
+assert_contains "2.4T A95B case was exercised"  "$PARAMS_OUT" "Qwen3.8 2.4T A95B -> (2400.0, 95.0)"
 
 # ─── 6. raw (fixtures) ────────────────────────────────────────────────────────
 describe "aa.py raw (fixtures)"

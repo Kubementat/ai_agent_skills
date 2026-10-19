@@ -153,7 +153,11 @@ Because the free tier exposes no open-weights flag, a model is treated as open-w
    InternLM/InternVL, GPT-OSS, Apertus, OLMo, Magistral, LongCat, Nanbeige, DeepCoder, Arcee,
    Tulu, Sarvam)
 4. parameter counts come from `params` in the override file when present, otherwise are parsed
-   from the name (`32B` → 32/32, `235B-A22B` and `235B A22B` → 235 total / 22 active)
+   from the name (`32B` → 32/32, `235B-A22B` and `235B A22B` → 235 total / 22 active,
+   `2.4T A95B` → 2400 total / 95 active — `T` is trillion). A size only counts when the number
+   is glued to its unit, so `Nemotron 3.5 Bolt 74B-A9B` is 74B (the `3.5` is a version) and the
+   total is taken from the size token next to the `-A<NN>B` marker. Unrecognised naming (for
+   example `8x22B`) stays unknown rather than being guessed low.
 
 When you learn a parameter count or an open/closed status that the heuristic gets wrong, add
 it to `skills/artificial-analysis/assets/open_weights_overrides.json` (`{"include": [...],

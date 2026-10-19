@@ -548,18 +548,53 @@ def looks_open_weights(name, overrides):
     return any(family in lower for family in OPEN_WEIGHT_FAMILIES)
 
 
-PARAM_RE = re.compile(r"(?P<total>\d+(?:\.\d+)?)\s*B(?:\s*-?\s*A\s*(?P<active>\d+(?:\.\d+)?)\s*B)?", re.IGNORECASE)
+# Parameter counts embedded in model names. Rules, learned the hard way against live data:
+#  * the number must be GLUED to its unit. "Nemotron 3.5 Bolt 74B-A9B" is version 3.5 of a
+#    74B model, not 3.5B; "Qwen3-235B" is 235B, "Qwen3.8" carries no size at all.
+#  * "T" is trillion, not billion: "Qwen3.8 2.4T A95B" is 2400B total / 95B active.
+#  * a size token that directly follows a letter belongs to that token, so the "95B" inside
+#    "A95B" is an active count, never a total.
+#  * when the name has both a size and an active marker, the total is the size token that
+#    sits immediately before the active marker ("74B-A9B", "397B A17B").
+# Anything that does not match is unknown size — callers must exclude it unless --all asked
+# for it, never treat it as small.
+SIZE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9.])(?P<count>\d+(?:\.\d+)?)(?P<unit>[BT])(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+# MoE active-parameter marker: "-A22B", " A95B", "-A 3B".
+ACTIVE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])A\s*(?P<count>\d+(?:\.\d+)?)B(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+UNITS_TO_BILLIONS = {"b": 1.0, "t": 1000.0}
 
 
 def parse_params(name):
-    """Extract (total_b, active_b) from names like '32B' or '235B-A22B'."""
-    match = PARAM_RE.search(name or "")
-    if not match:
+    """Extract (total_b, active_b) in billions from names like '32B', '2.4T' or '235B-A22B'."""
+    text = name or ""
+    active, active_start = None, None
+    active_match = ACTIVE_TOKEN_RE.search(text)
+    if active_match:
+        active = float(active_match.group("count"))
+        active_start = active_match.start()
+    sizes = [
+        (match.start(), float(match.group("count")) * UNITS_TO_BILLIONS[match.group("unit").lower()])
+        for match in SIZE_TOKEN_RE.finditer(text)
+    ]
+    total = None
+    if active_start is not None:
+        before = [item for item in sizes if item[0] < active_start]
+        if before:
+            total = before[-1][1]
+    elif sizes:
+        total = sizes[0][1]
+    if total is None:
         return None, None
-    total = float(match.group("total"))
-    active_raw = match.group("active")
-    active = float(active_raw) if active_raw else total
-    return total, active
+    if active is not None and active > total:
+        # Contradictory naming (active > total): not confident, treat as unknown size.
+        return None, None
+    return total, (active if active is not None else total)
 
 
 def override_params(model, overrides):

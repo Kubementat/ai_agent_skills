@@ -318,6 +318,45 @@
       "median_time_to_first_answer_token": 0
     },
     {
+      "id": "8df710d3-9dae-4498-9b4e-9818238e6f31",
+      "name": "Qwen3.8 2.4T A95B",
+      "slug": "qwen3-8-2-4t-a95b",
+      "release_date": "2026-08-12",
+      "model_creator": {
+        "id": "d874d370-74d3-4fa0-ba00-5272f92f946b",
+        "name": "Alibaba",
+        "slug": "alibaba"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 39.9,
+        "artificial_analysis_coding_index": 71.9,
+        "artificial_analysis_math_index": null,
+        "mmlu_pro": null,
+        "gpqa": 0.935,
+        "hle": 0.424,
+        "livecodebench": null,
+        "scicode": 0.541,
+        "math_500": null,
+        "aime": null,
+        "aime_25": null,
+        "ifbench": null,
+        "lcr": 0.803333333333333,
+        "terminalbench_hard": null,
+        "terminalbench_v2_1": 0.820224719101124,
+        "terminalbench_v4_0": 0.111111111111111,
+        "tau2": null,
+        "tau_banking": 0.490721649484536
+      },
+      "pricing": {
+        "price_1m_blended_3_to_1": 3,
+        "price_1m_input_tokens": 2,
+        "price_1m_output_tokens": 6
+      },
+      "median_output_tokens_per_second": 35.716,
+      "median_time_to_first_token_seconds": 1.987,
+      "median_time_to_first_answer_token": 57.984
+    },
+    {
       "id": "2236df45-0699-40d1-b5cc-69ee345d2257",
       "name": "Qwen3.5 122B A10B (Reasoning)",
       "slug": "qwen3-5-122b-a10b",
@@ -864,6 +903,45 @@
       "median_time_to_first_answer_token": 7.249
     },
     {
+      "id": "7d2aa050-888e-4c27-a92d-10337a4dfb3a",
+      "name": "Nemotron 3.5 Bolt 74B-A9B",
+      "slug": "nemotron-3-5-bolt-74b-a9b",
+      "release_date": "2026-10-15",
+      "model_creator": {
+        "id": "0c303112-430d-4367-a484-51defaa2e166",
+        "name": "NVIDIA",
+        "slug": "nvidia"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 21.4,
+        "artificial_analysis_coding_index": null,
+        "artificial_analysis_math_index": null,
+        "mmlu_pro": null,
+        "gpqa": null,
+        "hle": 0.247,
+        "livecodebench": null,
+        "scicode": 0.397,
+        "math_500": null,
+        "aime": null,
+        "aime_25": null,
+        "ifbench": null,
+        "lcr": 0.696666666666667,
+        "terminalbench_hard": null,
+        "terminalbench_v2_1": null,
+        "terminalbench_v4_0": 0,
+        "tau2": null,
+        "tau_banking": null
+      },
+      "pricing": {
+        "price_1m_blended_3_to_1": 0,
+        "price_1m_input_tokens": 0,
+        "price_1m_output_tokens": 0
+      },
+      "median_output_tokens_per_second": 0,
+      "median_time_to_first_token_seconds": 0,
+      "median_time_to_first_answer_token": 0
+    },
+    {
       "id": "277f939a-985b-4b37-859d-b3eabc7c0b26",
       "name": "MiniMax-M3",
       "slug": "minimax-m3",
@@ -1057,84 +1135,6 @@
       "median_output_tokens_per_second": 147.642,
       "median_time_to_first_token_seconds": 1.192,
       "median_time_to_first_answer_token": 14.738
-    },
-    {
-      "id": "a89c4b28-2d8c-456e-88ea-255fb51fd2b6",
-      "name": "GPT-5.4 (Xhigh)",
-      "slug": "gpt-5-4",
-      "release_date": "2026-03-05",
-      "model_creator": {
-        "id": "e67e56e3-15cd-43db-b679-da4660a69f41",
-        "name": "OpenAI",
-        "slug": "openai"
-      },
-      "evaluations": {
-        "artificial_analysis_intelligence_index": 39,
-        "artificial_analysis_coding_index": 71.1,
-        "artificial_analysis_math_index": null,
-        "mmlu_pro": null,
-        "gpqa": 0.92,
-        "hle": 0.437,
-        "livecodebench": null,
-        "scicode": null,
-        "math_500": null,
-        "aime": null,
-        "aime_25": null,
-        "ifbench": 0.739455782312925,
-        "lcr": 0.82,
-        "terminalbench_hard": 0.575757575757576,
-        "terminalbench_v2_1": 0.782771535580524,
-        "terminalbench_v4_0": null,
-        "tau2": 0.871345029239766,
-        "tau_banking": 0.395876288659794
-      },
-      "pricing": {
-        "price_1m_blended_3_to_1": 5.625,
-        "price_1m_input_tokens": 2.5,
-        "price_1m_output_tokens": 15
-      },
-      "median_output_tokens_per_second": 0,
-      "median_time_to_first_token_seconds": 0,
-      "median_time_to_first_answer_token": 0
-    },
-    {
-      "id": "45c87531-2d57-48e0-8012-202cd636189e",
-      "name": "Llama 3.1 Instruct 405B",
-      "slug": "llama-3-1-instruct-405b",
-      "release_date": "2024-07-23",
-      "model_creator": {
-        "id": "e1694725-0192-4e54-b1b8-c97e816c6cbe",
-        "name": "Meta",
-        "slug": "meta"
-      },
-      "evaluations": {
-        "artificial_analysis_intelligence_index": 7.3,
-        "artificial_analysis_coding_index": null,
-        "artificial_analysis_math_index": 3,
-        "mmlu_pro": 0.732,
-        "gpqa": 0.515,
-        "hle": 0.04,
-        "livecodebench": 0.305,
-        "scicode": null,
-        "math_500": 0.703333333333333,
-        "aime": 0.213333333333333,
-        "aime_25": 0.03,
-        "ifbench": 0.390476190476191,
-        "lcr": 0.253333333333333,
-        "terminalbench_hard": 0.0681818181818182,
-        "terminalbench_v2_1": null,
-        "terminalbench_v4_0": null,
-        "tau2": 0.190058479532164,
-        "tau_banking": null
-      },
-      "pricing": {
-        "price_1m_blended_3_to_1": 0,
-        "price_1m_input_tokens": 0,
-        "price_1m_output_tokens": 0
-      },
-      "median_output_tokens_per_second": 0,
-      "median_time_to_first_token_seconds": 0,
-      "median_time_to_first_answer_token": 0
     },
     {
       "id": "5d303dc9-c027-401f-9803-4e9aa3331007",
