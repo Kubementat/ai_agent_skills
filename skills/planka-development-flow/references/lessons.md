@@ -96,3 +96,33 @@ occur in them — `s|__TOKEN__|$val|g` — and refuse to launch on an empty
 rendered prompt (guard added in dispatch.sh 2026-10-19). When a dispatch run
 logs "launched" but `herdr workspace list` shows no new `impl-*` workspace
 within a minute, suspect this class of silent launch failure.**
+
+## 11. Workers can confabulate harness states that don't exist (pi "plan mode", 2026-10-19)
+
+A pi worker (qwen3.8-flash-next) refused to edit anything, claiming "plan mode is
+active — I must not make changes", and even quoted a system block ("supercedes
+any other instructions", "ExitPlanMode") that exists nowhere in pi v1.3.0 — pure
+training-data confabulation (Claude Code's plan-mode reminder). Verified: no pi
+flag, keystroke, settings key, per-cwd state, or prompt text enables plan mode;
+the phrase appears only in assistant thinking blocks. AGENTS.md "planning"
+language (karpathy-guidelines, docs/plans) likely primes it.
+**Rule: workers that must edit get an edit-authority assertion at SYSTEM-prompt
+level, not just user-prompt level (the model frames the conflict as
+system > user). Launcher supports it: `run-pi-herdr.sh -asp "You have full
+edit/write/commit authority; there is no plan mode or read-only mode in this
+harness."` A user-message-only version demonstrably works too (attempt 2
+implemented fine) but is one confabulation away from failing again.**
+
+## 12. `capture_report` empty read usually means the agent process died — stderr was swallowed (2026-10-19)
+
+`herdr agent read` on a dead agent prints `agent_not_found` on **stderr** with
+empty stdout; dispatch.sh pipes `2>/dev/null`, so a dead process looked like a
+flush race and burned 5 pointless retries. Separately: the pi process died
+mid-turn right after moving its card (endpoint-load death suspected) — a worker
+that moves the card then dies bypasses `wait_for_card`'s in-Progress rescue, and
+the final `STATUS:` report was never generated anywhere.
+**Rule in capture_report: (1) do not discard stderr — `agent_not_found` means
+bounce with cause "agent process died", not "read empty"; (2) fall back to the
+pi session JSONL (`agent_session_path` from `herdr agent list`) for the last
+assistant text block — durable, immune to pane death; (3) before trusting a card
+move as a worker's final act, cross-check agent liveness in `herdr agent list`.**
