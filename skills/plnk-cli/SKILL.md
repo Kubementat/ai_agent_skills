@@ -223,6 +223,15 @@ plnk task create --card <cardId> --title "Write tests" --output json
 plnk comment create --card <cardId> --text "Starting work" --output json
 ```
 
+Work with attachments (file/ID are POSITIONAL — there is no `--file` flag):
+
+```bash
+plnk attachment upload --card <cardId> /path/to/file --output json
+plnk attachment list --card <cardId> --output json      # .size is null in list/upload output
+plnk attachment download <attachmentId> --card <cardId> --out /tmp/check.bin
+# verify an upload by round-trip: download and `cmp` against the source file
+```
+
 ## When Unsure
 
 If command syntax, flags, or resource behavior are uncertain, inspect machine-readable help instead of guessing:
