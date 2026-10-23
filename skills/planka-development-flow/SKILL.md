@@ -78,7 +78,7 @@ plnk comment list --card <cardId> --output json | jq -r '.data | sort_by(.create
    — creates the card, adopts the `Dispatch` field group, sets the `project` field.
 3. Tickets in **Ready** are the gate: only cards you put there get worked.
 4. **Verify the description actually landed** with `plnk card snapshot <id>`
-   (`card get` never shows it; `card create --description` can drop it silently).
+   (`card get` never shows it; `card create --description` can drop it silently). The description lives at `.data.item.description` in snapshot output — NOT `.data.card`; dump `.data | keys` before concluding it's missing.
    A title-only card burns all its attempts before anyone notices — implementers
    fail with no usable spec. If the body is missing: `plnk card update <id>
    --description @file`, reset the `attempts` field, return the card to Ready.
@@ -136,6 +136,16 @@ when the agent drops even that (turn ends, card unmoved), the dispatcher
 rescues: it detects the idle agent and completes the move from the
 transcript's verdict/status marker or the commit evidence (gates still apply).
 
+## Merging Human Review cards (operator close)
+
+1. Work in the project's main checkout (`PROJ_<name>_repo`), never in a worktree. Commit or stash pending operator edits on main first — they collide mid-merge otherwise.
+2. Merge the `ai/<cardId>` branches oldest-first: `git merge --no-ff ai/<cardId> -m "Merge ai/<cardId>: <title> (Planka #<cardId>)"`.
+3. Resolve conflicts, then run the FULL test suite on main before pushing. Expect cross-branch assertion failures: one branch's tests can assert a code rule (e.g. no-sed) that another branch's code violates. Fix the product code to satisfy both (pure-bash equivalent), not the assertion.
+4. Push to the project's forge remote — check `git remote -v` for the right remote name; never push to a GitHub upstream remote.
+5. Post a merge-evidence comment per card (merge commit SHA, conflict resolutions, test status) and move it to `$LIST_DONE`; the next dispatch run's cleanup phase removes the worktrees and branches.
+
+Merging early matters for in-flight cards: the dispatcher script executes from the main checkout, so merged dispatcher fixes take effect on later phases/runs even for branches based on older main (branch code is not rebased between attempts).
+
 ## Other skills to use
 - when planning workloads, specifications and tickets with the user load and use the `grill-me` skill
 
@@ -167,8 +177,8 @@ transcript's verdict/status marker or the commit evidence (gates still apply).
   commands AND amend the ticket body if the fix is required — re-dispatched
   implementers and reviewers read comments, but only the body is the contract.
 - **Never run `dispatch.sh run` in a foreground terminal call** — a Hermes terminal timeout kills the script mid-poll: the launched herdr agent survives but the in-process rescue/gate logic dies, orphaning the In Progress card (the next cron run ignores it; `phase_implement` only reads Ready). Correct pattern: `run` in background with notify, OR after launching, attach your own watcher: poll `plnk card get` listId + `herdr agent list` status; if the agent ends idle without moving the card, apply rescue manually from STATUS.md verdict / commit evidence (gates still apply).
-- Recovering a lost review verdict: the reviewer's pi session JSONL survives capture failure — find it under `~/.pi/agent/sessions/--workspace-worktrees-<project>-<cardId>--/*.jsonl` by mtime window, then `jq -r 'select(.type=="message") | select(.message.role=="assistant") | .message.content[]? | select(.type=="text") | .text' <file> | tail -60`. Post the recovered findings as an operator card comment ASAP — bounces with no findings send implementers hunting phantom issues.
-- `plnk` auth is NOT in a credential store — every fresh shell needs `set -a; source ~/.config/planka-development-flow/config.env; set +a`, otherwise calls return `success:false / AuthenticationFailed`. Field values: `plnk card field list <card>` (`.data[] | .customFieldId/.content`). Review-phase CHANGES bounces do NOT increment `attempts` (only gate bounces do).
+- Recovering a lost review verdict: the reviewer's pi session JSONL survives capture failure — find it under `~/.pi/agent/sessions/--workspace-worktrees-<project>-<cardId>--/*.jsonl` by mtime window, then `jq -r 'select(.type=="message") | select(.message.role=="assistant") | .message.content[]? | select(.type=="text" or .type=="thinking") | (.text // .thinking)' <file> | tail -80`. If a text-only extraction returns empty, the agent ended its turn after moving the card without emitting a final message — the verdict lives in the `thinking` blocks (search them for "verdict"); the full issues list is almost always there. Post the recovered findings as an operator card comment ASAP — bounces with no findings send implementers hunting phantom issues.
+- `plnk` env-var auth exists only in shells that source the config (`set -a; source ~/.config/planka-development-flow/config.env; set +a`). herdr agent sessions inherit the **herdr server's** env, not the dispatcher's — with no persisted credentials the implementer fails step 1 (`card get`) with `AuthenticationFailed` and burns an attempt in ~2 minutes (symptom: bounce with a report full of auth errors). One-time fix: persist the token in plnk's own credential store — `plnk auth token set --server "$PLANKA_SERVER" "$PLANKA_TOKEN"` (subcommand is `token set`; the token is a POSITIONAL arg, there is no `--token` flag on `set`). Verify agent-style: `env -i HOME=$HOME PATH=$HOME/.local/bin:/usr/bin:/bin plnk auth status` → `authenticated: true, source: "config file"`. Field values: `plnk card field list <card>` (`.data[] | .customFieldId/.content`). Review-phase CHANGES bounces do NOT increment `attempts` (only gate bounces do).
 - Log file for cron runs: `~/.config/planka-development-flow/dispatch.log` —
   only cron appends there; a manual `dispatch.sh run` logs to stdout. So a card
   in `In Progress` (or a live herdr agent whose worktree cwd contains the card
