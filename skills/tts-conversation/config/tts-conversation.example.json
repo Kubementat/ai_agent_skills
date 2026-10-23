@@ -1,0 +1,15 @@
+{
+  "server": "http://127.0.0.1:8977",
+  "voice": null,
+  "language": "English",
+  "instructions": null,
+  "seed": null,
+  "auto_play": true,
+  "player": "auto",
+  "players": ["paplay", "pw-play", "ffplay", "aplay"],
+  "out_dir": "~/.cache/tts-conversation",
+  "keep_files": 20,
+  "voices_dir": null,
+  "max_words": 90,
+  "timeout_s": 900
+}

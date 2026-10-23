@@ -150,6 +150,7 @@ Skills for organizing and managing knowledge bases.
 | **obsidian-master** | Complete Obsidian vault control via CLI: read/edit/search/links/tasks/properties/plugins |
 | **obsidian-open-loops-collector** | Collect open loops from Obsidian: tasks, TODOs, dangling thoughts, stub notes |
 | **quest-system** | Goal-first daily work system ("Captain's Log"): calendar + task briefing, lat economy, ranks, streaks. Replaces morning-ritual |
+| **tts-conversation** | Talk instead of type: synthesizes each reply on a local TTS server and plays it on the speakers, with a config for voice, language and player |
 
 ### Development Tools & Strategy
 Skills for development workflows and strategic planning.
