@@ -69,3 +69,84 @@ the transcript and completes the move from deterministic evidence (`VERDICT:`
 line for reviews, `STATUS:` marker / commit count for implementations). The
 gates remain the authority — the rescue only supplies the move.
 **Rule: never make the pipeline wait on an agent that has stopped.
+
+## 9. Cron deploys lose plnk auth and PATH (2026-10-19, host integration)
+
+`plnk` does not auto-load `~/.config/plnk/credentials.env` — it only reads
+`PLANKA_SERVER`/`PLANKA_TOKEN` from the environment (or flags). Under cron's
+bare env every call returns `success:false`, so `.data` is null and the
+dispatcher's jq pipes emit `Cannot iterate over null` while every phase
+silently sees zero cards — a fully broken pipeline that looks idle. Cron's
+PATH also lacks `~/.local/bin` where `plnk` and `herdr` live.
+**Rule: in any non-interactive deployment (cron/systemd), add to config.env:
+`. "$HOME/.config/plnk/credentials.env"; export PLANKA_SERVER PLANKA_TOKEN`
+and set a crontab `PATH=` line including `~/.local/bin`. Verify with
+`env -i HOME=$HOME PATH=/home/ubuntu/.local/bin:/usr/bin:/bin dispatch.sh run`
+— zero jq errors is the green light, not exit code 0.
+
+## 10. sed placeholder rendering breaks on slash-bearing values (2026-10-19, kwisatz card)
+
+`run_agent()` renders agent prompts via `sed -e "s/__TOKEN__/$val/g"`. A
+config value containing `/` (e.g. `PROJ_x_base_ref="origin/feat/pyinfra-migration"`)
+terminates the s-command early: `sed: unknown option to 's'` → empty prompt →
+herdr agent launched with no instructions (output sent to /dev/null, so silent)
+→ card burns its attempt and times out an hour later.
+**Rule: don't interpolate untrusted values into `sed` at all — every delimiter
+is some value you can collide with. `run_agent()` now renders prompts with
+pure bash substitution over placeholder/value pairs (`render_prompt()`: no
+external renderer, no delimiter class) and still refuses to launch on an empty
+rendered prompt. Two gotchas hit while replacing it: the pattern must be quoted
+(`${content//"$pat"/"$val"}`) to match literally, and bash >= 5.3 treats an
+unquoted `&` in the replacement as "the matched text", so the value must be
+quoted too. When a dispatch run logs "launched" but `herdr workspace list`
+shows no new `impl-*` workspace within a minute, suspect this class of silent
+launch failure.**
+
+## 11. Workers can confabulate harness states that don't exist (pi "plan mode", 2026-10-19)
+
+A pi worker (qwen3.8-flash-next) refused to edit anything, claiming "plan mode is
+active — I must not make changes", and even quoted a system block ("supercedes
+any other instructions", "ExitPlanMode") that exists nowhere in pi v1.3.0 — pure
+training-data confabulation (Claude Code's plan-mode reminder). Verified: no pi
+flag, keystroke, settings key, per-cwd state, or prompt text enables plan mode;
+the phrase appears only in assistant thinking blocks. AGENTS.md "planning"
+language (karpathy-guidelines, docs/plans) likely primes it.
+**Rule: workers that must edit get an edit-authority assertion at SYSTEM-prompt
+level, not just user-prompt level (the model frames the conflict as
+system > user). Launcher supports it: `run-pi-herdr.sh -asp "You have full
+edit/write/commit authority; there is no plan mode or read-only mode in this
+harness."` A user-message-only version demonstrably works too (attempt 2
+implemented fine) but is one confabulation away from failing again.**
+
+## 12. `capture_report` empty read usually means the agent process died — stderr was swallowed (2026-10-19)
+
+`herdr agent read` on a dead agent prints `agent_not_found` on **stderr** with
+empty stdout; dispatch.sh pipes `2>/dev/null`, so a dead process looked like a
+flush race and burned 5 pointless retries. Separately: the pi process died
+mid-turn right after moving its card (endpoint-load death suspected) — a worker
+that moves the card then dies bypasses `wait_for_card`'s in-Progress rescue, and
+the final `STATUS:` report was never generated anywhere.
+**Rule in capture_report: (1) do not discard stderr — `agent_not_found` means
+bounce with cause "agent process died", not "read empty"; (2) fall back to the
+pi session JSONL (`agent_session_path` from `herdr agent list`) for the last
+assistant text block — durable, immune to pane death; (3) before trusting a card
+move as a worker's final act, cross-check agent liveness in `herdr agent list`.**
+
+## 13. A fallback you cannot test is a fallback that doesn't exist (2026-10-19)
+
+The JSONL fallback of lesson 12 was itself dead code: it built the session
+directory as `path | sed 's|/|-|g'` -> `-workspace-...`, while pi encodes a cwd
+as slashes-as-dashes wrapped in **two** dashes on each side —
+`/workspace/worktrees/kwisatz/123` ->
+`~/.pi/agent/sessions/--workspace-worktrees-kwisatz-123--`. That glob could
+never match, so production logged "no session fallback" while valid session
+files sat there. The same run logged `launched 1 implementer(s)` before
+verifying anything and sent launcher output to `/dev/null`, so a launch that
+created no workspace looked like success for a full `CARD_TIMEOUT`.
+**Rule: (1) derive a path encoding from a real `ls` of the host, never from a
+mental model, and keep it in one named helper (`pi_session_dir()`) shared by
+the pipeline and its self-test; (2) every fallback gets a command that proves
+it — `dispatch.sh test-capture <worktree>` prints the recovered assistant text
+and exits non-zero when it cannot; (3) a launch is not "launched" until its
+herdr workspace exists (`wait_for_workspace`), and launcher stdout/stderr
+belongs in `$LAUNCH_LOG_DIR/launch-<label>.log`, never `/dev/null`.**

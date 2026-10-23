@@ -3,9 +3,9 @@
 # dispatch.sh — classical orchestrator for the planka-development-flow system.
 #
 # Polls the Planka dispatch board, claims eligible tickets, launches agentic
-# implementer/reviewer sessions via herdr, verifies their work with hard
-# gates, and captures their reports. Zero LLM in this script: the agent is
-# the only fuzzy part.
+# implementer/reviewer sessions via herdr (or runagent+asb sandbox), verifies
+# their work with hard gates, and captures their reports. Zero LLM in this
+# script: the agent is the only fuzzy part.
 #
 # Usage:
 #   dispatch.sh run         # implement + review + cleanup (the cron entry point)
@@ -13,13 +13,79 @@
 #   dispatch.sh review      # only the AI-review phase
 #   dispatch.sh cleanup     # only worktree/branch cleanup for Done cards
 #   dispatch.sh status      # board overview
+#   dispatch.sh test-capture <worktree>  # self-test the session-JSONL capture
+#                                       # fallback (read-only, prints the text)
 #
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_DIR="$SCRIPT_DIR/prompts"
+SKILL_PATH="$(cd "$SCRIPT_DIR/../" && pwd)/SKILL.md"
 CONFIG=${PLANKA_DEVFLOW_CONFIG:-"$HOME/.config/planka-development-flow/config.env"}
 LOCKFILE="${TMPDIR:-/tmp}/planka-devflow.lock"
+
+# ---------------------------------------------------------------------------
+# pi session files — the durable transcript fallback used by capture_report.
+# Kept above the config load so `dispatch.sh test-capture` is a self-test that
+# works on a machine with no board configured (read-only: no plnk, no writes).
+# ---------------------------------------------------------------------------
+# pi names a session directory after the agent cwd: slashes become dashes and
+# the whole thing is wrapped in TWO dashes on each side, e.g.
+#   /workspace/worktrees/kwisatz/123 -> --workspace-worktrees-kwisatz-123--
+# (verified against `ls ~/.pi/agent/sessions/` on the host, 2026-10-19). The
+# single-leading-dash form people reach for first can never match.
+pi_session_dir() { # <worktree> — the session directory pi uses for this cwd
+  local p=${1%/}
+  [[ "$p" = /* ]] || p="$PWD/$p"
+  while [[ "$p" == *//* ]]; do p=${p//\/\//\/}; done
+  printf '%s/.pi/agent/sessions/-%s--\n' "${HOME%/}" "${p//\//-}"
+}
+
+latest_session_file() { # <worktree> — newest session JSONL (empty if none)
+  local dir
+  dir=$(pi_session_dir "$1")
+  ls -t "$dir"/*.jsonl 2>/dev/null | head -1
+}
+
+last_assistant_text() { # <jsonl> — last non-empty assistant text block
+  jq -rs '[.[]
+      | select(.type=="message" and .message.role=="assistant")
+      | ([.message.content[]? | select(.type=="text") | .text] | join("\n"))]
+      | map(select(length>0)) | last // ""' "$1" 2>/dev/null
+}
+
+cmd_test_capture() { # <worktree> — self-test: prove the fallback can extract text
+  local wt=${1:-}
+  if [ -z "$wt" ]; then
+    echo "usage: dispatch.sh test-capture <worktree>" >&2
+    return 2
+  fi
+  local dir sess text
+  dir=$(pi_session_dir "$wt")
+  if [ ! -d "$dir" ]; then
+    echo "FAIL: no pi session dir for worktree: $dir" >&2
+    return 1
+  fi
+  sess=$(latest_session_file "$wt")
+  if [ -z "$sess" ]; then
+    echo "FAIL: no session JSONL in $dir" >&2
+    return 1
+  fi
+  text=$(last_assistant_text "$sess")
+  if [ -z "$text" ]; then
+    echo "FAIL: no non-empty assistant text block in $sess" >&2
+    return 1
+  fi
+  echo "# session: $sess" >&2
+  printf '%s\n' "$text"
+  return 0
+}
+
+# `test-capture` needs no board config, no credentials and no lock.
+if [ "${1:-}" = "test-capture" ]; then
+  cmd_test_capture "${2:-}"
+  exit $?
+fi
 
 [ -f "$CONFIG" ] || { echo "ERROR: config not found: $CONFIG" >&2; exit 2; }
 # shellcheck disable=SC1090
@@ -35,16 +101,14 @@ MISSING=""
 for v in PLANKA_PROJECT PLANKA_BOARD LIST_INBOX LIST_READY LIST_CLAIMED \
          LIST_IN_PROGRESS LIST_READY_REVIEW LIST_AI_REVIEW LIST_HUMAN_REVIEW \
          LIST_DONE LIST_REJECTED FIELD_GROUP BASE_GROUP FIELD_PROJECT \
-         FIELD_ATTEMPTS HERDR_RUN; do
+         FIELD_ATTEMPTS; do
   [ -n "${!v:-}" ] || MISSING="$MISSING $v"
 done
 if [ -n "$MISSING" ]; then
-  echo "ERROR: incomplete config ($CONFIG) — set:$MISSING" >&2
-  exit 2
+  echo "ERROR: incomplete config ($CONFIG) — set:$MISSING" >&2; exit 2
 fi
 if [ -z "$MODEL_IMPL" ] || [ -z "$MODEL_REVIEW" ]; then
-  echo "ERROR: no model configured ($CONFIG) — set MODEL and/or MODEL_IMPL / MODEL_REVIEW" >&2
-  exit 2
+  echo "ERROR: no model configured ($CONFIG) — set MODEL and/or MODEL_IMPL / MODEL_REVIEW" >&2; exit 2
 fi
 
 # Thinking levels: THINKING_IMPL / THINKING_REVIEW append a pi `:level` suffix
@@ -61,7 +125,36 @@ thinking_suffix() { # <model> <thinking> <role>
 }
 MODEL_IMPL=$(thinking_suffix "$MODEL_IMPL" "${THINKING_IMPL:-}" impl)
 MODEL_REVIEW=$(thinking_suffix "$MODEL_REVIEW" "${THINKING_REVIEW:-}" review)
-[ -x "$HERDR_RUN" ] || { echo "ERROR: HERDR_RUN is not executable: $HERDR_RUN" >&2; exit 2; }
+
+# --- Runner config -----------------------------------------------------------
+: "${RUNNER:=herdr}"          # herdr | runagent
+: "${AGENT_IMPL:=impl}"       # runagent profile name for implementer
+: "${AGENT_REVIEW:=review}"   # runagent profile name for reviewer
+: "${RUNAGENT:=runagent}"     # command name or absolute path
+
+if [ "$RUNNER" = "runagent" ]; then
+  # Prefer the explicit RUNAGENT path; fall back to PATH lookup.
+  if [ -x "$RUNAGENT" ]; then
+    : # RUNAGENT is already an executable path
+  elif command -v "$RUNAGENT" >/dev/null 2>&1; then
+    RUNAGENT="$(command -v "$RUNAGENT")"
+  else
+    echo "ERROR: RUNNER=runagent but RUNAGENT='$RUNAGENT' not found" >&2; exit 2
+  fi
+  # Preflight: check if asb supports --ro-bind (reviewer read-only worktree).
+  # Log a warning once per run if --ro-bind is absent (degraded mode).
+  _ASB_SUPPORTS_RO_BIND=true
+  if command -v asb >/dev/null 2>&1; then
+    if ! asb --help 2>&1 | grep -q -- '--ro-bind'; then
+      _ASB_SUPPORTS_RO_BIND=false
+      echo "WARNING: asb does not support --ro-bind (reviewer worktree will not be read-only; G3 backstop still applies)" >&2
+    fi
+  else
+    echo "WARNING: asb not found on PATH; reviewer worktree will not be read-only (G3 backstop still applies)" >&2
+  fi
+else
+  [ -x "$HERDR_RUN" ] || { echo "ERROR: HERDR_RUN is not executable: $HERDR_RUN" >&2; exit 2; }
+fi
 
 # Defaults for anything the config leaves unset
 : "${MAX_PARALLEL:=2}"
@@ -69,6 +162,13 @@ MODEL_REVIEW=$(thinking_suffix "$MODEL_REVIEW" "${THINKING_REVIEW:-}" review)
 : "${CARD_TIMEOUT:=3600}"
 : "${POLL_INTERVAL:=20}"
 : "${WT_ROOT:=$HOME/worktrees}"
+# Every agent launch writes its launcher stdout/stderr to $LAUNCH_LOG_DIR/
+# launch-<label>.log. Launch failures used to disappear into /dev/null.
+: "${LAUNCH_LOG_DIR:=$HOME/.config/planka-development-flow/launch-logs}"
+# How long to wait for the launched agent's herdr workspace to show up before
+# declaring the launch failed (fail-closed), and how often to look.
+: "${LAUNCH_VERIFY_TIMEOUT:=60}"
+: "${LAUNCH_VERIFY_INTERVAL:=2}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
@@ -95,6 +195,121 @@ comment_count() { # <card>
   plnk comment list --card "$1" --output json 2>/dev/null | jq -r '.data | length' 2>/dev/null || echo 0
 }
 
+# ---------------------------------------------------------------------------
+# durable verdict files — <worktree>/.dispatcher/STATUS.md (implementer) and
+# <worktree>/.dispatcher/REVIEW.md (reviewer)
+#
+# Agents write these files BEFORE moving the card. A terminal pane buffer is
+# the wrong transport for verdicts: the card move lands a beat before the
+# agent's process dies and `herdr agent read` can return nothing (incident
+# 2026-10-19, lessons 11/12). The dispatcher reads the file first; absence is
+# normal for agents that do not know the contract yet and must degrade
+# gracefully to today's pane capture — never hard-fail.
+# ---------------------------------------------------------------------------
+verdict_file_text() { # <path> -> file content on stdout; 1 if missing/empty
+  local f=$1 t
+  [ -f "$f" ] || return 1
+  t=$(head -c 6000 "$f" 2>/dev/null | tr -d '\r') || return 1
+  [ -n "${t//[[:space:]]/}" ] || return 1
+  printf '%s\n' "$t"
+}
+
+status_verdict_of() { # <text> -> DONE | FAILED | ""
+  local m
+  m=$(printf '%s\n' "$1" | head -5 | grep -oE 'STATUS:[[:space:]]*(DONE|FAILED)' | head -1)
+  [ -n "$m" ] || return 0
+  case "$m" in
+    *FAILED*) echo FAILED ;;
+    *) echo DONE ;;
+  esac
+}
+
+review_verdict_of() { # <text> -> APPROVE | CHANGES_REQUESTED | ""
+  local m
+  m=$(printf '%s\n' "$1" | head -5 | grep -oE 'VERDICT:[[:space:]]*(CHANGES[[:space:]_-]+REQUESTED|APPROVE)' | head -1)
+  [ -n "$m" ] || return 0
+  case "$m" in
+    *APPROVE*) echo APPROVE ;;
+    *) echo CHANGES_REQUESTED ;;
+  esac
+}
+
+verdict_line_of() { # <text> -> first 'VERDICT: ...' line, trimmed; "" if none
+  # Pure-bash trim (1/6 rule: no sed in dispatch.sh).
+  local line
+  line=$(printf '%s\n' "$1" | grep -m1 -E '^[[:space:]]*VERDICT:' | head -1)
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  printf '%s\n' "$line"
+}
+
+# Freshness: a verdict file is only meaningful for the run that writes it. A
+# leftover file from an earlier attempt (a bounced implementation, a previous
+# review) must never be read as this run's verdict — an old REVIEW.md saying
+# APPROVE would stamp APPROVE on a review that produced nothing.
+clear_stale_verdict() { # <worktree> <impl|review>
+  local wt=${1:-} role=${2:-impl} f
+  [ -n "$wt" ] || return 0
+  case "$role" in
+    review) f="$wt/.dispatcher/REVIEW.md" ;;
+    *)      f="$wt/.dispatcher/STATUS.md" ;;
+  esac
+  [ -e "$f" ] && rm -f -- "$f"
+  return 0
+}
+
+# Report transport: durable verdict file wins, then the pane capture.
+post_report() { # <card> <wsLabel> <worktree> <fileText> <heading>
+  local card=$1 label=$2 wt=$3 text=$4 heading=$5
+  if [ -n "$text" ]; then
+    add_comment "$card" "## $heading
+
+$text"
+    return 0
+  fi
+  capture_report "$card" "$label" "$wt"
+}
+
+# Gate G3 input: changed files, minus pipeline scratch that must never be
+# committed or judged as scope (.dispatcher/ verdict files).
+scope_diff_files() { # <worktree> <baseRef>
+  git -C "$1" diff --name-only "$2..HEAD" 2>/dev/null | grep -v '^\.dispatcher/'
+  return 0
+}
+
+# Verdict file wins over card position when the two disagree; no file at all
+# reproduces today's position-only behaviour.
+impl_outcome() { # <listId> <statusVerdict> -> proceed | failed | unexpected
+  local list=$1 v=$2
+  case "$v" in
+    DONE)   echo proceed; return ;;
+    FAILED) echo failed;  return ;;
+  esac
+  case "$list" in
+    "$LIST_READY_REVIEW") echo proceed ;;
+    "$LIST_READY")        echo failed ;;
+    *)                    echo unexpected ;;
+  esac
+}
+
+review_outcome() { # <listId> <reviewVerdict> -> approve | changes | changes_mismatch | warn_missing | warn_mismatch | unexpected
+  local list=$1 v=$2
+  case "$list" in
+    "$LIST_HUMAN_REVIEW")
+      case "$v" in
+        "")      echo warn_missing ;;
+        APPROVE) echo approve ;;
+        *)       echo warn_mismatch ;;
+      esac ;;
+    "$LIST_READY")
+      case "$v" in
+        APPROVE) echo changes_mismatch ;;
+        *)       echo changes ;;
+      esac ;;
+    *) echo unexpected ;;
+  esac
+}
+
 proj_key() { # shell-safe key: non-alphanumeric -> _  (my-app -> my_app)
   echo "${1//[^a-zA-Z0-9]/_}"
 }
@@ -119,29 +334,54 @@ agent_by_ws() { # <workspaceId> — first agent in this workspace that has a nam
     | jq -r --arg ws "$1" '(.result // .) | .agents[]? | select(.workspace_id==$ws) | .name // empty | select(. != "")' 2>/dev/null \
     | head -1
 }
+wait_for_workspace() { # <label> [timeout] — 0 once a workspace with this label exists
+  local label=$1 timeout=${2:-$LAUNCH_VERIFY_TIMEOUT}
+  local start now
+  start=$(date +%s)
+  while :; do
+    [ -n "$(ws_id_by_label "$label")" ] && return 0
+    now=$(date +%s)
+    [ $((now - start)) -ge "$timeout" ] && return 1
+    sleep "$LAUNCH_VERIFY_INTERVAL"
+  done
+}
+
 close_ws() { # <label>
   local ws
   ws=$(ws_id_by_label "$1")
   [ -n "$ws" ] && herdr workspace close "$ws" >/dev/null 2>&1
   return 0
 }
-capture_report() { # <card> <wsLabel>
+capture_report() { # <card> <wsLabel> [worktree]
   # Post the agent's final transcript output as a card comment.
   # The pipeline owns reporting: agents are not trusted to post it.
-  local agent text ws
+  local agent text ws errf wt_fallback=${3:-}
   ws=$(ws_id_by_label "$2")
   [ -z "$ws" ] && { log "capture $2: no workspace found"; return 1; }
   agent=$(agent_by_ws "$ws")
   [ -z "$agent" ] && { log "capture $2: workspace $ws has no named agent"; return 1; }
   # The card move lands a beat before the agent's terminal buffer settles, so
-  # retry the read a few times rather than racing the flush.
+  # retry the read a few times rather than racing the flush. An
+  # agent_not_found on stderr means the PROCESS DIED — retrying is pointless.
   local i
+  errf=$(mktemp)
   for i in 1 2 3 4 5; do
-    text=$(herdr agent read "$agent" --source recent --lines 200 2>/dev/null | head -c 4000)
+    text=$(herdr agent read "$agent" --source recent --lines 200 2>"$errf" | head -c 4000)
     [ -n "$text" ] && break
+    grep -q 'agent_not_found' "$errf" 2>/dev/null && break
     sleep 5
   done
-  [ -z "$text" ] && { log "capture $2: agent $agent read empty after retries"; return 1; }
+  # Fallback: the pi session JSONL survives pane/process death.
+  if [ -z "$text" ] && [ -n "$wt_fallback" ]; then
+    local sess
+    sess=$(latest_session_file "$wt_fallback")
+    if [ -n "$sess" ]; then
+      text=$(last_assistant_text "$sess" | head -c 4000)
+      [ -n "$text" ] && log "capture $2: recovered from session file $sess"
+    fi
+  fi
+  rm -f "$errf"
+  [ -z "$text" ] && { log "capture $2: agent $agent unreadable (pane empty/dead, no session fallback)"; return 1; }
   add_comment "$1" "## Report (auto-captured by dispatcher — agent did not post its own comment)
 
 $text"
@@ -150,17 +390,120 @@ $text"
 # ---------------------------------------------------------------------------
 # agent launch + wait
 # ---------------------------------------------------------------------------
-run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model>
-  local card=$1 label=$2 wt=$3 promptfile=$4 baseref=$5 model=$6 prompt
-  prompt=$(sed \
-    -e "s/__CARD__/$card/g" \
-    -e "s/__BASE_REF__/$baseref/g" \
-    -e "s/__LIST_READY__/$LIST_READY/g" \
-    -e "s/__LIST_READY_REVIEW__/$LIST_READY_REVIEW/g" \
-    -e "s/__LIST_HUMAN_REVIEW__/$LIST_HUMAN_REVIEW/g" \
-    "$promptfile")
-  "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
-    -w "$CARD_TIMEOUT_MS" --no-wait >/dev/null 2>&1
+# Prompt rendering: pure bash substitution over placeholder/value pairs. There
+# is no external renderer and therefore no delimiter class to collide with — a
+# config value like PROJ_x_base_ref="origin/feat/migration" used to break the
+# old stream-editor renderer and silently produce an empty prompt (lesson 10).
+render_prompt() { # <promptFile> <placeholder> <value> [<placeholder> <value> ...]
+  local file=$1 content ph val pat
+  content=$(cat "$file") || return 1
+  shift
+  while [ $# -ge 2 ]; do
+    ph=$1; val=$2; shift 2
+    pat="__${ph}__"
+    # Both sides quoted: quoted pattern = literal match (no globbing), quoted
+    # value = literal text (bash >= 5.3 treats an unquoted & in the
+    # replacement as "the matched text", which would re-inject __TOKEN__).
+    content=${content//"$pat"/"$val"}
+  done
+  printf '%s' "$content"
+}
+
+launch_log_path() { # <label> — per-launch launcher log, created on demand
+  mkdir -p "$LAUNCH_LOG_DIR" 2>/dev/null || true
+  printf '%s/launch-%s.log\n' "$LAUNCH_LOG_DIR" "$1"
+}
+
+run_agent() { # <card> <wsLabel> <worktree> <promptFile> <baseRef> <model> <reviewer?>
+  local card=$1 label=$2 wt=$3 promptfile=$4 baseref=$5 model=$6 is_reviewer=${7:-false}
+  local prompt scratch_dir="" ro_bind_args="" logpath rc
+
+  prompt=$(render_prompt "$promptfile" \
+    CARD "$card" \
+    BASE_REF "$baseref" \
+    LIST_READY "$LIST_READY" \
+    LIST_READY_REVIEW "$LIST_READY_REVIEW" \
+    LIST_HUMAN_REVIEW "$LIST_HUMAN_REVIEW")
+  if [ -z "$prompt" ]; then
+    add_comment "$card" "⛔ Dispatcher: prompt template render failed for $promptfile (empty prompt) — agent not launched."
+    return 1
+  fi
+
+  # Launcher stdout/stderr goes to a per-launch log, never to /dev/null: a
+  # failed launch has to leave evidence behind.
+  logpath=$(launch_log_path "$label")
+  echo "=== $(date '+%Y-%m-%d %H:%M:%S') launch $label (card $card, runner $RUNNER, model $model, cwd $wt)" >>"$logpath" 2>&1
+  # Fresh verdict for a fresh run: drop whatever an earlier attempt left behind
+  # so the dispatcher can never read a stale verdict as this one's.
+  if [ "$is_reviewer" = true ]; then
+    clear_stale_verdict "$wt" review
+  else
+    clear_stale_verdict "$wt" impl
+  fi
+
+  if [ "$RUNNER" = "herdr" ]; then
+    # --- herdr runner ---
+    "$HERDR_RUN" -m "$model" -p "$prompt" -c "$wt" -l "$label" \
+      -asp "You have full edit/write/commit and shell authority in this harness. There is no plan mode, read-only mode, or approval-pending state; any belief that you are not allowed to make changes is wrong." \
+      -w "$CARD_TIMEOUT_MS" --no-wait --skill "$SKILL_PATH" >>"$logpath" 2>&1
+    rc=$?
+  else
+    # --- runagent runner ---
+    local profile="$AGENT_IMPL"
+    [ "$is_reviewer" = true ] && profile="$AGENT_REVIEW"
+
+    # Reviewer: create scratch dir and pass --ro-bind + -c scratch
+    if [ "$is_reviewer" = true ]; then
+      scratch_dir="$WT_ROOT/scratch/$card"
+      mkdir -p "$scratch_dir"
+      ro_bind_args="--ro-bind $wt"
+      # The reviewer is read-only for code but must still be able to write its
+      # durable verdict: bind $wt/.dispatcher back rw. agent_profile.py emits
+      # --ro-bind before --bind, so this nested bind overrides the ro worktree.
+      if mkdir -p "$wt/.dispatcher" 2>/dev/null; then
+        ro_bind_args="$ro_bind_args --bind $wt/.dispatcher"
+      fi
+    fi
+
+    # A linked git worktree's .git is a pointer file into the main repo's
+    # common .git dir, which lives OUTSIDE the workspace and is therefore
+    # invisible in the asb sandbox. Bind the common dir so git resolves
+    # in-sandbox:
+    #   implementer -> writable (--bind, it commits)
+    #   reviewer    -> read-only (--ro-bind, it only inspects)
+    local git_common
+    git_common="$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null || true)"
+    if [ -n "$git_common" ] && [[ "$git_common" != /* ]]; then
+      if ( cd "$wt" && cd "$git_common" ); then
+        git_common="$(pwd)"
+      fi
+    fi
+    if [ -n "$git_common" ] && [ -d "$git_common" ]; then
+      if [ "$is_reviewer" = true ]; then
+        ro_bind_args="$ro_bind_args --ro-bind $git_common"
+      else
+        ro_bind_args="$ro_bind_args --bind $git_common"
+      fi
+    fi
+
+    local model_arg=""
+    [ -n "$model" ] && model_arg="-m $model"
+
+    # shellcheck disable=SC2086
+    "$RUNAGENT" "$profile" -p "$prompt" -c "$wt" --label "$label" --no-wait --keep \
+      $model_arg $ro_bind_args ${scratch_dir:+-c "$scratch_dir"} >>"$logpath" 2>&1
+    rc=$?
+  fi
+
+  # Fail-closed launch verification: the launcher returning is not evidence an
+  # agent exists. Poll for the workspace this launch was supposed to create.
+  if ! wait_for_workspace "$label"; then
+    log "launch $label: NO WORKSPACE after ${LAUNCH_VERIFY_TIMEOUT}s (launcher rc=$rc) — launch failed"
+    add_comment "$card" "⛔ Dispatcher: launch failed: no herdr workspace for $label; see $logpath"
+    return 1
+  fi
+  log "launch $label verified (log: $logpath)"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -324,17 +667,32 @@ finish_implementation() { # <card>
     return 1
   fi
 
-  local list
+  # --- verdict: durable file first, card position second ---------------------
+  local list sf sf_text sf_verdict outcome note
+  sf="$wt/.dispatcher/STATUS.md"
+  sf_text=$(verdict_file_text "$sf")
+  sf_verdict=$(status_verdict_of "$sf_text")
   list=$(card_list "$card")
-  if [ "$list" = "$LIST_READY" ]; then
-    capture_report "$card" "impl-$card" || true
-    bounce "$card" "impl-$card" "🔁 Bounced: implementer reported failure."
+  outcome=$(impl_outcome "$list" "$sf_verdict")
+  note=""
+  [ -n "$sf_verdict" ] && note=" (verdict file: STATUS: $sf_verdict)"
+
+  if [ "$outcome" = "failed" ]; then
+    post_report "$card" "impl-$card" "$wt" "$sf_text" "Report from .dispatcher/STATUS.md (implementer)" || true
+    bounce "$card" "impl-$card" "🔁 Bounced: implementer reported failure.$note"
     return 1
   fi
-  if [ "$list" != "$LIST_READY_REVIEW" ]; then
+  if [ "$outcome" = "unexpected" ]; then
+    post_report "$card" "impl-$card" "$wt" "$sf_text" "Report from .dispatcher/STATUS.md (implementer)" || true
     add_comment "$card" "⚠️ Dispatcher: card in unexpected list after implementation."
     bounce "$card" "impl-$card" "⛔ Dispatcher: unexpected card state after implementation."
     return 1
+  fi
+  if [ "$list" != "$LIST_READY_REVIEW" ]; then
+    # Card position was ambiguous (unmoved / odd list) but the verdict file is
+    # explicit: trust the file, the hard gates below still apply.
+    add_comment "$card" "🧾 Dispatcher: card is not in Ready for Review but .dispatcher/STATUS.md says STATUS: DONE — trusting the verdict file (gates still apply)."
+    move_card "$card" "$LIST_READY_REVIEW"
   fi
 
   # --- G1: commits exist -------------------------------------------------
@@ -376,7 +734,7 @@ $(tail -15 "$testlog")"
         case "$f" in $p) soft_hits="$soft_hits $f"; break;; esac
       done
     fi
-  done < <(git -C "$wt" diff --name-only "$baseref..HEAD")
+  done < <(scope_diff_files "$wt" "$baseref")
 
   if [ -n "$hard_hits" ]; then
     add_comment "$card" "⛔ Gate G3 (hard) failed: diff touches protected files:$hard_hits"
@@ -387,9 +745,9 @@ $(tail -15 "$testlog")"
     add_comment "$card" "⚠️ Gate G3 (soft): diff touches files that default to do-not-touch:$soft_hits — human review attention required."
   fi
 
-  # --- report: agent's own comment, else auto-capture -----------------------
+  # --- report: verdict file, agent's own comment, else auto-capture ---------
   if [ "$(comment_count "$card")" -le "${COMMENTS_BEFORE[$card]}" ]; then
-    capture_report "$card" "impl-$card" \
+    post_report "$card" "impl-$card" "$wt" "$sf_text" "Report from .dispatcher/STATUS.md (implementer)" \
       || add_comment "$card" "⚠️ Dispatcher: no implementer report found and transcript capture failed."
   fi
 
@@ -417,17 +775,30 @@ phase_implement() {
     fi
   done
   [ ${#dispatched[@]} -eq 0 ] && return 0
-  log "launched ${#dispatched[@]} implementer(s): ${dispatched[*]}"
 
-  local p br
+  # Launch, then verify. Only agents whose herdr workspace actually appeared
+  # count as launched — the log line must never claim a failed launch.
+  local p br entry launched=() failed=()
+  local pids=()
   for c in "${dispatched[@]}"; do
     p=${PROJECT_OF[$c]}
     br=$(proj_base_ref "$p")
     run_agent "$c" "impl-$c" "$WT_ROOT/$p/$c" "$PROMPT_DIR/implementer.txt" "$br" "$MODEL_IMPL" &
+    pids+=("$!:$c")
   done
-  wait
+  for entry in "${pids[@]}"; do
+    if wait "${entry%%:*}"; then launched+=("${entry#*:}"); else failed+=("${entry#*:}"); fi
+  done
 
-  for c in "${dispatched[@]}"; do
+  [ ${#launched[@]} -gt 0 ] && log "launched ${#launched[@]} implementer(s): ${launched[*]}"
+  for c in "${failed[@]:-}"; do
+    [ -n "$c" ] || continue
+    log "card $c: implementer launch failed (see $LAUNCH_LOG_DIR/launch-impl-$c.log)"
+    bounce "$c" "impl-$c" "⛔ Dispatcher: implementer launch failed — no herdr workspace appeared for impl-$c (launcher log: $LAUNCH_LOG_DIR/launch-impl-$c.log)."
+  done
+
+  for c in "${launched[@]:-}"; do
+    [ -n "$c" ] || continue
     finish_implementation "$c" || true
   done
 }
@@ -449,7 +820,12 @@ review_card() { # <card>
   local before
   before=$(comment_count "$card")
 
-  run_agent "$card" "review-$card" "$wt" "$PROMPT_DIR/reviewer.txt" "$baseref" "$MODEL_REVIEW"
+  if ! run_agent "$card" "review-$card" "$wt" "$PROMPT_DIR/reviewer.txt" "$baseref" "$MODEL_REVIEW" true; then
+    add_comment "$card" "⛔ Dispatcher: reviewer launch failed — returning to Ready for Review."
+    move_card "$card" "$LIST_READY_REVIEW"
+    close_ws "review-$card"
+    return 1
+  fi
   if ! wait_for_card "$card" "$LIST_AI_REVIEW" "" "review-$card" review; then
     add_comment "$card" "⛔ Dispatcher: review timed out after ${CARD_TIMEOUT}s — returning to Ready for Review."
     move_card "$card" "$LIST_READY_REVIEW"
@@ -457,18 +833,46 @@ review_card() { # <card>
     return 1
   fi
 
-  # Reviewer report: agent's own comment, else auto-capture
+  # --- verdict: durable file first, card position second ---------------------
+  # No APPROVE stamp without a REVIEW.md that actually says APPROVE: a card
+  # position alone carries zero report content for the human (incident
+  # 2026-10-19).
+  local list rf rf_text rf_verdict rf_line outcome note
+  list=$(card_list "$card")
+  rf="$wt/.dispatcher/REVIEW.md"
+  rf_text=$(verdict_file_text "$rf")
+  rf_verdict=$(review_verdict_of "$rf_text")
+  rf_line=$(verdict_line_of "$rf_text")
+  note=""
+  [ -n "$rf_line" ] && note=" (verdict file: $rf_line)"
+
+  # Reviewer report: verdict file, agent's own comment, else auto-capture
   if [ "$(comment_count "$card")" -le "$before" ]; then
-    capture_report "$card" "review-$card" \
+    post_report "$card" "review-$card" "$wt" "$rf_text" "Review report from .dispatcher/REVIEW.md (AI reviewer)" \
       || add_comment "$card" "⚠️ Dispatcher: no review verdict found and transcript capture failed."
   fi
 
-  local list
-  list=$(card_list "$card")
-  case "$list" in
-    "$LIST_HUMAN_REVIEW") add_comment "$card" "✅ AI review: APPROVE — awaiting human review." ;;
-    "$LIST_READY")        add_comment "$card" "🔁 AI review: CHANGES REQUESTED — back to Ready for re-implementation." ;;
-    *)                    add_comment "$card" "⚠️ Dispatcher: unexpected list after AI review." ;;
+  outcome=$(review_outcome "$list" "$rf_verdict")
+  case "$outcome" in
+    approve)  add_comment "$card" "✅ AI review: APPROVE — awaiting human review.$note" ;;
+    changes)  add_comment "$card" "🔁 AI review: CHANGES REQUESTED — back to Ready for re-implementation.$note" ;;
+    changes_mismatch)
+      add_comment "$card" "🔁 AI review: CHANGES REQUESTED — back to Ready for re-implementation. ⚠️ Verdict file says '$rf_line' but the card is in Ready — trusting the card position."
+      log "card $card: verdict file mismatch (file=$rf_verdict list=Ready) — kept CHANGES REQUESTED"
+      ;;
+    warn_missing)
+      add_comment "$card" "⚠️ Dispatcher: card moved to Human Review but verdict file missing — human: check transcript"
+      close_ws "review-$card"
+      log "card $card: in Human Review with no $rf — APPROVE not stamped"
+      return 1
+      ;;
+    warn_mismatch)
+      add_comment "$card" "⚠️ Dispatcher: card moved to Human Review but verdict file says '$rf_line' — APPROVE not stamped; human: check transcript"
+      close_ws "review-$card"
+      log "card $card: verdict file mismatch (file=$rf_verdict list=Human Review) — APPROVE not stamped"
+      return 1
+      ;;
+    *)        add_comment "$card" "⚠️ Dispatcher: unexpected list after AI review." ;;
   esac
   close_ws "review-$card"
   log "card $card: review done (now in list $list)"
@@ -507,6 +911,11 @@ phase_cleanup() {
     wt="$WT_ROOT/$p/$c"
     if [ -d "$wt" ]; then
       git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 && log "removed worktree $wt"
+    fi
+    # Durable verdict files are untracked pipeline scratch: drop whatever the
+    # worktree removal did not take with it (never committed, never reviewed).
+    if [ -d "$wt/.dispatcher" ]; then
+      rm -rf -- "$wt/.dispatcher" && log "removed verdict dir $wt/.dispatcher"
     fi
     git -C "$repo" branch -D "ai/$c" >/dev/null 2>&1 && log "deleted branch ai/$c"
   done < <(plnk card list --list "$LIST_DONE" --output json 2>/dev/null | jq -r '.data[].id')
@@ -548,9 +957,13 @@ main() {
     implement) phase_implement ;;
     review)    phase_review ;;
     cleanup)   phase_cleanup ;;
-    *) echo "usage: dispatch.sh {run|implement|review|cleanup|status}" >&2; return 2 ;;
+    *) echo "usage: dispatch.sh {run|implement|review|cleanup|status|test-capture <worktree>}" >&2; return 2 ;;
   esac
   log "dispatch run complete"
 }
 
-main "$@"
+# Only start a run when executed directly; tests source this file to exercise
+# the pure helpers (verdict files, gate decisions) without touching Planka.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

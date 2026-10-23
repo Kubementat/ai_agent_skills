@@ -50,6 +50,7 @@ SKILL=<path to this skill>
 
 $SKILL/scripts/dispatch.sh status      # board overview
 $SKILL/scripts/dispatch.sh run         # full pass: implement + review + cleanup
+$SKILL/scripts/dispatch.sh test-capture <worktree>   # self-test transcript capture
 $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticket.md
 ```
 
@@ -59,6 +60,16 @@ $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticke
 */30 * * * * <path to this skill>/scripts/dispatch.sh run >> ~/.config/planka-development-flow/dispatch.log 2>&1
 ```
 
+**Reading the board beyond `status`** — the config defines `LIST_*` variables
+(there is no `BOARD_ID`); card list JSON is a plain `.data` array and the card
+title lives in `.name`, not `.title`:
+
+```bash
+source ~/.config/planka-development-flow/config.env
+plnk card list --list "$LIST_HUMAN_REVIEW" --output json | jq -r '.data[] | "\(.id)  \(.name)"'
+plnk comment list --card <cardId> --output json | jq -r '.data | sort_by(.createdAt) | .[] | "---- \(.createdAt)\n\(.text)"'
+```
+
 ## Creating tickets
 
 1. Write the ticket as markdown following the format contract:
@@ -66,6 +77,11 @@ $SKILL/scripts/new-card.sh --title "Add /foo" --project my-app --desc /tmp/ticke
 2. `new-card.sh --title "..." --project <name> --desc file.md [--list inbox|ready]`
    — creates the card, adopts the `Dispatch` field group, sets the `project` field.
 3. Tickets in **Ready** are the gate: only cards you put there get worked.
+4. **Verify the description actually landed** with `plnk card snapshot <id>`
+   (`card get` never shows it; `card create --description` can drop it silently). The description lives at `.data.item.description` in snapshot output — NOT `.data.card`; dump `.data | keys` before concluding it's missing.
+   A title-only card burns all its attempts before anyone notices — implementers
+   fail with no usable spec. If the body is missing: `plnk card update <id>
+   --description @file`, reset the `attempts` field, return the card to Ready.
 
 `project` field values must match a `PROJ_<name>_repo` key in the config
 (see below). Cards with unknown projects are skipped (not bounced).
@@ -94,6 +110,8 @@ PROJ_my_app_soft=Dockerfile docker-compose.yml package.json package-lock.json
 | `THINKING_IMPL` / `THINKING_REVIEW` | pi thinking level per role (`off`…`max`), appended as a `:level` suffix |
 | `HERDR_RUN` | path to `run-pi-herdr.sh` |
 | `WT_ROOT` | worktree root (`<root>/<project>/<cardId>`) |
+| `LAUNCH_LOG_DIR` | per-launch launcher logs `launch-<label>.log` (default `~/.config/planka-development-flow/launch-logs`) |
+| `LAUNCH_VERIFY_TIMEOUT` | seconds to wait for the launched agent's herdr workspace before the launch counts as failed (default 60) |
 | `*_hard` | file globs — touching any → bounce (gate G3 hard) |
 | `*_soft` | file globs — touching any → flag comment, continues (gate G3 soft) |
 
@@ -118,6 +136,19 @@ when the agent drops even that (turn ends, card unmoved), the dispatcher
 rescues: it detects the idle agent and completes the move from the
 transcript's verdict/status marker or the commit evidence (gates still apply).
 
+## Merging Human Review cards (operator close)
+
+1. Work in the project's main checkout (`PROJ_<name>_repo`), never in a worktree. Commit or stash pending operator edits on main first — they collide mid-merge otherwise.
+2. Merge the `ai/<cardId>` branches oldest-first: `git merge --no-ff ai/<cardId> -m "Merge ai/<cardId>: <title> (Planka #<cardId>)"`.
+3. Resolve conflicts, then run the FULL test suite on main before pushing. Expect cross-branch assertion failures: one branch's tests can assert a code rule (e.g. no-sed) that another branch's code violates. Fix the product code to satisfy both (pure-bash equivalent), not the assertion.
+4. Push to the project's forge remote — check `git remote -v` for the right remote name; never push to a GitHub upstream remote.
+5. Post a merge-evidence comment per card (merge commit SHA, conflict resolutions, test status) and move it to `$LIST_DONE`; the next dispatch run's cleanup phase removes the worktrees and branches.
+
+Merging early matters for in-flight cards: the dispatcher script executes from the main checkout, so merged dispatcher fixes take effect on later phases/runs even for branches based on older main (branch code is not rebased between attempts).
+
+## Other skills to use
+- when planning workloads, specifications and tickets with the user load and use the `grill-me` skill
+
 ## Prerequisites
 
 - `plnk` CLI on PATH with valid token (`plnk auth whoami`)
@@ -135,7 +166,32 @@ transcript's verdict/status marker or the commit evidence (gates still apply).
   failed is named in the bounce comment (`G1`/`G2`/`G3`).
 - `no eligible cards` but there are cards in Ready → check the `project` field
   value matches a config key, and `attempts` < `MAX_ATTEMPTS`.
-- Log file for cron runs: `~/.config/planka-development-flow/dispatch.log`
+- **G2 fails on a suite the change did not touch** → run the exact gate command
+  in a clean checkout of `base_ref` BEFORE re-dispatching: a pre-existing failure
+  on main bounces every card regardless of content. Fix it inside the same ticket
+  — amend the ticket body to explicitly authorize the minimal test change under
+  Constraints. Do NOT file a separate fix ticket to wait on: worktree branches are
+  not rebased onto a merged fix between attempts, so the gate keeps failing.
+- Testing the branch while its card is in flight (live probes, manual runs) and
+  finding defects → post them as an imperative card comment with exact repro
+  commands AND amend the ticket body if the fix is required — re-dispatched
+  implementers and reviewers read comments, but only the body is the contract.
+- **Never run `dispatch.sh run` in a foreground terminal call** — a Hermes terminal timeout kills the script mid-poll: the launched herdr agent survives but the in-process rescue/gate logic dies, orphaning the In Progress card (the next cron run ignores it; `phase_implement` only reads Ready). Correct pattern: `run` in background with notify, OR after launching, attach your own watcher: poll `plnk card get` listId + `herdr agent list` status; if the agent ends idle without moving the card, apply rescue manually from STATUS.md verdict / commit evidence (gates still apply).
+- Recovering a lost review verdict: the reviewer's pi session JSONL survives capture failure — find it under `~/.pi/agent/sessions/--workspace-worktrees-<project>-<cardId>--/*.jsonl` by mtime window, then `jq -r 'select(.type=="message") | select(.message.role=="assistant") | .message.content[]? | select(.type=="text" or .type=="thinking") | (.text // .thinking)' <file> | tail -80`. If a text-only extraction returns empty, the agent ended its turn after moving the card without emitting a final message — the verdict lives in the `thinking` blocks (search them for "verdict"); the full issues list is almost always there. Post the recovered findings as an operator card comment ASAP — bounces with no findings send implementers hunting phantom issues.
+- `plnk` env-var auth exists only in shells that source the config (`set -a; source ~/.config/planka-development-flow/config.env; set +a`). herdr agent sessions inherit the **herdr server's** env, not the dispatcher's — with no persisted credentials the implementer fails step 1 (`card get`) with `AuthenticationFailed` and burns an attempt in ~2 minutes (symptom: bounce with a report full of auth errors). One-time fix: persist the token in plnk's own credential store — `plnk auth token set --server "$PLANKA_SERVER" "$PLANKA_TOKEN"` (subcommand is `token set`; the token is a POSITIONAL arg, there is no `--token` flag on `set`). Verify agent-style: `env -i HOME=$HOME PATH=$HOME/.local/bin:/usr/bin:/bin plnk auth status` → `authenticated: true, source: "config file"`. Field values: `plnk card field list <card>` (`.data[] | .customFieldId/.content`). Review-phase CHANGES bounces do NOT increment `attempts` (only gate bounces do).
+- Log file for cron runs: `~/.config/planka-development-flow/dispatch.log` —
+  only cron appends there; a manual `dispatch.sh run` logs to stdout. So a card
+  in `In Progress` (or a live herdr agent whose worktree cwd contains the card
+  id) with no `launched` line in the log usually means a hand-run dispatch or an
+  operator-reset Rejected card, not corruption. Card comments are the ground
+  truth: operator notes and `🚀 Dispatched` entries land there, not in the log.
+- `launch failed: no herdr workspace for impl-<cardId>` → the launcher died
+  before creating the session; read the named
+  `$LAUNCH_LOG_DIR/launch-impl-<cardId>.log`. The card is bounced back to
+  Ready instead of idling an hour in In Progress.
+- Missing auto-captured report → the herdr read failed *and* the pi session
+  fallback found nothing; `dispatch.sh test-capture <worktree>` exercises the
+  same fallback (session dir is `~/.pi/agent/sessions/--<path-with-dashes>--`).
 
 ## Extending
 

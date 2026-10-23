@@ -43,9 +43,13 @@ planka-development-flow/
 │   ├── card-format.md            # ticket description contract
 │   ├── gates.md                  # phases, gate chain, bounce/reject detail
 │   └── lessons.md                # why the architecture is shaped this way
+├── profiles/
+│   ├── impl.md                   # runagent profile for the implementer agent
+│   └── review.md                 # runagent profile for the reviewer agent
 └── scripts/
     ├── setup-board.sh            # one-time board bootstrap (idempotent)
-    ├── dispatch.sh               # the orchestrator (run / implement / review / cleanup / status)
+    ├── setup-agents.sh           # install runagent profiles to ~/.pi/agent/agents/ (idempotent)
+    ├── dispatch.sh               # the orchestrator (run / implement / review / cleanup / status / test-capture)
     ├── new-card.sh               # create + provision a ticket
     └── prompts/
         ├── implementer.txt       # implementer agent prompt
@@ -101,6 +105,12 @@ Plus plain system tools: `git`, `jq`, `flock`.
    - set `MODEL` (your herdr/pi model, e.g. `<provider>/<model>`) and `HERDR_RUN`
      (path to `herdr-cli`'s `run-pi-herdr.sh`) — the script refuses to run
      without `HERDR_RUN` and without a resolvable model;
+   - `RUNNER` selects how agent sessions are launched (default `herdr`, the
+     legacy `run-pi-herdr.sh` path). `RUNNER=runagent` launches agents through
+     `runagent` + the asb bubblewrap sandbox instead; then set `RUNAGENT`
+     (command name or absolute path) and optionally `AGENT_IMPL` / `AGENT_REVIEW`
+     (runagent profile names, default `impl` / `review` — install the bundled
+     profiles with `scripts/setup-agents.sh`);
    - optionally set `MODEL_IMPL` / `MODEL_REVIEW` to use different models for
      the implementer and reviewer agents (each falls back to `MODEL`), and
      `THINKING_IMPL` / `THINKING_REVIEW` to set each agent's pi thinking level
@@ -142,6 +152,8 @@ Plus plain system tools: `git`, `jq`, `flock`.
 | `THINKING_IMPL` / `THINKING_REVIEW` | pi thinking level per role, appended as `:level` suffix (default unset) |
 | `HERDR_RUN` | path to `run-pi-herdr.sh` (required, must be executable) |
 | `CARD_TIMEOUT_MS` | herdr-side timeout in ms (default 1800000) |
+| `LAUNCH_LOG_DIR` | per-launch launcher logs (`launch-<label>.log`); default `~/.config/planka-development-flow/launch-logs` |
+| `LAUNCH_VERIFY_TIMEOUT` | seconds to wait for a launched agent's herdr workspace before calling the launch failed (default 60) |
 | `WT_ROOT` | worktree root; worktrees live at `<root>/<project>/<cardId>` |
 | `PROJ_<key>_repo` | absolute repo path; `key` = card `project` field with non-alphanumerics → `_` |
 | `PROJ_<key>_base_ref` | branch to create `ai/<cardId>` from (never HEAD) |
@@ -304,7 +316,21 @@ $SKILL/scripts/dispatch.sh run         # full pass: implement + review + cleanup
 $SKILL/scripts/dispatch.sh implement   # only the implementation phase
 $SKILL/scripts/dispatch.sh review      # only the AI-review phase
 $SKILL/scripts/dispatch.sh cleanup     # only worktree/branch cleanup
+$SKILL/scripts/dispatch.sh test-capture <worktree>   # self-test the transcript-capture fallback
 ```
+
+`test-capture` is read-only (no board calls, no lock): it resolves the pi
+session directory for a worktree (`--<path-with-dashes>--` under
+`~/.pi/agent/sessions/`), takes the newest session JSONL, prints its last
+non-empty assistant text block and exits 0 only if that extraction worked.
+Run it after a capture failure to see whether the fallback can still recover
+the report.
+
+Every launch writes the launcher's own stdout/stderr to
+`$LAUNCH_LOG_DIR/launch-<label>.log`, and a launch only counts as *launched*
+once its herdr workspace (`impl-<cardId>` / `review-<cardId>`) actually
+appears — a launch that produced no workspace is reported on the card with the
+log path and bounced back to `Ready`.
 
 `run` is idempotent and lock-protected (`flock`), so it is safe to overlap.
 The intended trigger is cron:
@@ -326,6 +352,8 @@ runs log to stderr with timestamps.
 | `incomplete config` error | `config.env` has empty placeholders — finish the setup steps or re-run `setup-board.sh` (it never overwrites; edit the existing file). |
 | Agent seems stuck | `herdr agent read <name> --source recent --lines 200` is the post-mortem tool. Agents are found via `herdr workspace list` (labels `impl-<cardId>` / `review-<cardId>`) + `herdr agent list`. |
 | Implausible diff for a small ticket | Worktree branched from a dirty state. Verify `PROJ_<key>_base_ref` points at a clean mainline; worktrees must never branch from HEAD. |
+| `launch failed: no herdr workspace for impl-<cardId>` | The launcher died before creating the session. Read the named `$LAUNCH_LOG_DIR/launch-impl-<cardId>.log` (bad model string, herdr server down, unreadable prompt). The card was bounced back to `Ready` and did not burn an hour in `In Progress`. |
+| Report never auto-captured | The herdr pane was empty/dead *and* the session fallback found nothing. Check with `dispatch.sh test-capture <worktree>` — it uses the same path as `capture_report`, so it fails and succeeds together with it. |
 
 ## Extending the system
 

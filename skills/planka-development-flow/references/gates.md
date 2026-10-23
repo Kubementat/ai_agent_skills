@@ -15,9 +15,9 @@ never trusted; the card state plus independent checks are.
 3. **Worktree** — `<WT_ROOT>/<project>/<cardId>` on branch `ai/<cardId>`,
    created from the config `base_ref` (existing worktrees/branches are reused
    on re-dispatch after a bounce).
-4. **Launch** — `run-pi-herdr.sh --no-wait` with the implementer prompt
-   (`scripts/prompts/implementer.txt`, placeholders substituted). Up to
-   `MAX_PARALLEL` agents run concurrently.
+4. **Launch** — `run-pi-herdr.sh --no-wait` (or `runagent` with sandbox) with
+   the implementer prompt (`scripts/prompts/implementer.txt`, placeholders
+   substituted). Up to `MAX_PARALLEL` agents run concurrently.
 5. **Wait** — poll `plnk card get` every `POLL_INTERVAL` seconds until the card
    leaves `In Progress` (or `CARD_TIMEOUT`). If the agent **ends its turn
    without moving the card** (agent idle, see lesson 8), the dispatcher
@@ -58,7 +58,8 @@ attempts >= MAX_ATTEMPTS → Rejected
 Same claim/launch/wait machinery on `Ready for Review` cards:
 
 1. `Ready for Review → In AI Review`
-2. reviewer agent (read-only for code; its only mutation is the card move)
+2. reviewer agent (read-only for code; in runagent mode the worktree is
+   OS-enforced read-only via asb `--ro-bind`). Its only mutation is the card move.
 3. report check (auto-capture the verdict if the comment is missing)
 4. `Human Review` (APPROVE) or `Ready` (CHANGES REQUESTED — no attempts bump;
    the review bounce is expected iteration, distinct from gate bounces)

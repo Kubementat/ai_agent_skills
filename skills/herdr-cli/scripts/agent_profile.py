@@ -11,7 +11,11 @@ This module is stdlib-only (no pyyaml). It implements a small YAML subset:
 
 CLI:
   agent_profile.py compose <agent> [--model M] [--workspace DIR] [--cwd DIR]
-                           [--env K=V]... [--json]
+                           [--env K=V]... [--ro-bind HOST[:DEST]]...
+                           [--bind HOST[:DEST]]... [--json]
+  agent_profile.py skills <agent> [--cwd DIR]
+      Print the profile's resolved skills as JSON: {"skills": null | "all"
+      | ["/path/to/SKILL.md", ...]}. Symlinked skills are followed (is_file).
   agent_profile.py list
 
 Exit codes: 0 ok, 2 usage, 12 profile resolution failure.
@@ -415,9 +419,20 @@ def translate_tools(tools):
     return ",".join(out)
 
 
+def _normalize_bind_spec(spec):
+    """Normalize a bind HOST[:DEST] spec: expand ~ on host (and dest) so asb
+    receives absolute paths (asb rejects non-absolute host/dest paths)."""
+    host, sep, dest = spec.partition(":")
+    host = os.path.expanduser(host)
+    if sep:
+        return f"{host}:{os.path.expanduser(dest)}"
+    return host
+
+
 # ── Composer ──────────────────────────────────────────────────────────────
 
-def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None, sandbox_override=None):
+def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None,
+                   sandbox_override=None, extra_ro_bind=None, extra_bind=None):
     """Compose the launch for a profile. Returns (argv, meta) — pure, no side effects
     other than writing the filtered MCP config temp file (path in meta['mcp_config']).
 
@@ -427,6 +442,8 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None, s
     cwd = str(Path(cwd or os.getcwd()).resolve())
     fm, body, path = load_profile(name, cwd)
     extra_env = list(extra_env or [])
+    extra_ro_bind = list(extra_ro_bind or [])
+    extra_bind = list(extra_bind or [])
 
     model = model or fm.get("model")
     if not model:
@@ -458,6 +475,30 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None, s
     skills = resolve_skills(fm.get("skills"), cwd)
     extensions = resolve_extensions(fm.get("extensions"))
     mcp_config, mcp_mode = resolve_mcp(fm.get("mcp"))
+
+    # Collect ro-bind paths: profile sandbox.ro_bind + CLI --ro-bind args (dedup)
+    profile_ro_bind = []
+    if isinstance(sandbox.get("ro_bind"), list):
+        profile_ro_bind = [str(p) for p in sandbox["ro_bind"]]
+    all_ro_bind = [_normalize_bind_spec(p) for p in list(profile_ro_bind) + list(extra_ro_bind)]
+    # Dedup while preserving order
+    seen_rb = set()
+    ro_bind_paths = []
+    for p in all_ro_bind:
+        if p not in seen_rb:
+            seen_rb.add(p)
+            ro_bind_paths.append(p)
+
+    # Writable bind paths: profile sandbox.bind + CLI --bind args (dedup, HOST[:DEST] spec)
+    profile_bind = []
+    if isinstance(sandbox.get("bind"), list):
+        profile_bind = [str(p) for p in sandbox["bind"]]
+    seen_b = set()
+    bind_paths = []
+    for p in (_normalize_bind_spec(x) for x in list(profile_bind) + list(extra_bind)):
+        if p not in seen_b:
+            seen_b.add(p)
+            bind_paths.append(p)
 
     # The asb sandbox bind-mounts the workspace dir (read-write) at its host
     # path, but /tmp is a private tmpfs — host /tmp files are NOT visible
@@ -517,8 +558,16 @@ def compose_launch(name, cwd=None, model=None, workspace=None, extra_env=None, s
         argv = ["asb", "pi", ws]
         for ev in env_args:
             argv += ["--env", ev]
+        # Add --ro-bind / --bind entries (asb takes one HOST[:DEST] value each)
+        for rb in ro_bind_paths:
+            argv += ["--ro-bind", rb]
+        for b in bind_paths:
+            argv += ["--bind", b]
         argv += pi_argv[1:]
     else:
+        # sandbox off: warn about CLI bind args and ignore them
+        if ro_bind_paths or bind_paths:
+            print("WARNING: profile sandbox is off; ignoring --ro-bind/--bind args", file=sys.stderr)
         argv = list(pi_argv)
 
     meta = {
@@ -565,9 +614,28 @@ def cmd_list(_args):
     return 0
 
 
+def cmd_skills(args):
+    if not args:
+        print("usage: agent_profile.py skills <agent> [--cwd DIR]", file=sys.stderr)
+        return 2
+    name = args[0]
+    cwd = None
+    i = 1
+    while i < len(args):
+        if args[i] == "--cwd":
+            cwd = args[i + 1]; i += 2
+        else:
+            print(f"unknown option: {args[i]}", file=sys.stderr)
+            return 2
+    fm, _, _ = load_profile(name, cwd)
+    skills = resolve_skills(fm.get("skills"), cwd)
+    print(json.dumps({"skills": skills}))
+    return 0
+
+
 def cmd_compose(args):
     if not args:
-        print("usage: agent_profile.py compose <agent> [--model M] [--workspace DIR] [--cwd DIR] [--env K=V]", file=sys.stderr)
+        print("usage: agent_profile.py compose <agent> [--model M] [--workspace DIR] [--cwd DIR] [--env K=V] [--ro-bind HOST[:DEST]]", file=sys.stderr)
         return 2
     name = args[0]
     kw = {}
@@ -582,6 +650,10 @@ def cmd_compose(args):
             kw["cwd"] = args[i + 1]; i += 2
         elif a == "--env":
             kw.setdefault("extra_env", []).append(args[i + 1]); i += 2
+        elif a == "--ro-bind":
+            kw.setdefault("extra_ro_bind", []).append(args[i + 1]); i += 2
+        elif a == "--bind":
+            kw.setdefault("extra_bind", []).append(args[i + 1]); i += 2
         else:
             print(f"unknown option: {a}", file=sys.stderr)
             return 2
@@ -598,6 +670,8 @@ def main(argv):
     try:
         if cmd == "list":
             return cmd_list(rest)
+        if cmd == "skills":
+            return cmd_skills(rest)
         if cmd == "compose":
             return cmd_compose(rest)
         print(f"unknown command: {cmd}", file=sys.stderr)

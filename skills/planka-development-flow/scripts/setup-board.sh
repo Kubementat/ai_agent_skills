@@ -24,6 +24,7 @@ PROJECT_NAME="AI-Orchestration"
 BOARD_NAME="Dispatch Board"
 WT_ROOT="$HOME/worktrees"
 CONFIG="${PLANKA_DEVFLOW_CONFIG:-$HOME/.config/planka-development-flow/config.env}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -182,6 +183,16 @@ MODEL_REVIEW=""                 # optional: override for the reviewer agent
 THINKING_IMPL=""                # optional: pi thinking level for the implementer
 THINKING_REVIEW=""              # optional: pi thinking level for the reviewer
 # Thinking levels: off / minimal / low / medium / high / xhigh / max
+
+# --- Runner selection ---
+# RUNNER=herdr   — use the legacy run-pi-herdr.sh (default, current behavior)
+# RUNNER=runagent — use runagent + asb bubblewrap sandbox (sandboxed agents)
+RUNNER=herdr
+# For RUNNER=runagent:
+# RUNAGENT=runagent   # command name (PATH) or absolute path to the runagent script
+# AGENT_IMPL=impl     # runagent profile name for the implementer agent
+# AGENT_REVIEW=review # runagent profile name for the reviewer agent
+
 CARD_TIMEOUT_MS=1800000 # herdr-side timeout (ms)
 
 # --- Worktrees ---
@@ -208,6 +219,14 @@ fi
 cat "$SNIPPET_FILE"
 
 mkdir -p "$WT_ROOT" 2>/dev/null || true
+
+# --- Install agent profiles (runagent mode) ------------------------------------
+# setup-agents.sh creates ~/.pi/agent/agents/impl.md and review.md from the
+# skill's profiles/ directory. It is idempotent (never overwrites existing files).
+if [ -x "$SCRIPT_DIR/setup-agents.sh" ]; then
+  log "running setup-agents.sh (install agent profiles)..."
+  "$SCRIPT_DIR/setup-agents.sh" || log "WARN: setup-agents.sh failed (profiles may already be installed)"
+fi
 
 log "done."
 log "Next steps:"

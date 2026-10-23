@@ -10,9 +10,18 @@ herdr is a terminal workspace manager that hosts and orchestrates AI coding agen
 
 ## Primary Workflow — Launching and Using an Agent
 
-__ATTENTION: The main usage scenario is implemented in helper scripts: `scripts/run-pi-herdr.sh` (pi), `scripts/run-claude-herdr.sh` (Claude Code), and `scripts/run-opencode-herdr.sh` (opencode). Use a script preferably!__
+__ATTENTION: Launch agents with the helper scripts (Decision Guide below), NOT with raw `herdr` CLI subcommands.__
 
-### Manual Workflow
+### Decision Guide
+
+| Situation | Use |
+|---|---|
+| Named role with a profile (system prompt + tools/skills/extension/MCP allowlists, sandbox) | `runagent <name> -p "..."` |
+| Ad-hoc one-shot, model only, no profile | `run-<kind>-herdr.sh -m <model> -p "..."` |
+| Multi-stage pipeline (research → plan → implement → review) | `pipeline-herdr.sh` |
+| Reuse an existing workspace, inspect/drive a launch step by step, agent kind without a script (codex, gemini, …) | manual `herdr` CLI (fallback below) |
+
+### Manual Workflow (fallback only)
 1. **Ensure the server is running**: `herdr status`. If not, start with `herdr server`.
 2. **Create a workspace** (auto-creates a default tab): `herdr workspace create --label "my-project"`.
 3. **Get the default tab and pane**: `herdr tab list --workspace <ws_id>` and `herdr pane list --workspace <ws_id>`.
@@ -25,8 +34,7 @@ The workflow is complete when `--wait` returns. Verify with `herdr agent list`.
 ## Helper Scripts
 
 Each script wraps the whole primary workflow (server check → workspace → tab → pane → agent
-start → prompt → wait → read output) in one command. Use them for one-shot tasks; drive the CLI
-by hand when you need to reuse a workspace or inspect intermediate state.
+start → prompt → wait → read output) in one command.
 
 | Script | Agent kind | Model format |
 |--------|-----------|--------------|
@@ -58,6 +66,8 @@ executed — edit it to change behavior for all three at once).
 |--------|--------|-------------|
 | pi, claude | `-sp, --system-prompt <text>` | Replace the system prompt (claude also expands `@file`) |
 | pi, claude | `-asp, --append-system-prompt <text>` | Append to the system prompt (repeatable) |
+| pi | `-sk, --skill <path>` | Load a skill file or directory (repeatable) |
+| pi | `-pr, --profile <name>` | Resolve skills from an agent profile (`~/.pi/agent/agents/<name>.md`) via `agent_profile.py` (same resolution as `runagent`) and add `--skill` flags |
 | claude | `--agent <name>` / `--agents <json>` | Predefined subagent / inline subagent definitions |
 | claude | `--permission-mode <mode>` | `default`, `acceptEdits`, `plan`, `bypassPermissions` |
 | claude | `--yolo` | `--dangerously-skip-permissions` (sandboxes only) |
@@ -77,6 +87,9 @@ scripts/run-opencode-herdr.sh -m "anthropic/claude-sonnet-4-5" -p "Review the di
 
 # Fire-and-forget
 scripts/run-pi-herdr.sh -m "qwen3.6-35b" -p "Run the full test suite" --no-wait
+
+# Skills resolved from an agent profile (impl/review from the planka skill)
+scripts/run-pi-herdr.sh --profile impl -m "dgx/qwen3.8-27b-q4" -p "Fix PLANKA-42" --no-wait
 ```
 
 Run any script with `--help` (or no arguments) for its full option list and examples.
@@ -126,12 +139,8 @@ subagents. A profile is a pi agent file at `~/.pi/agent/agents/<name>.md` (YAML 
 system-prompt body) that pins the full surface: model, tools, skills, extensions, MCP servers,
 sandbox policy.
 
-**When to use:**
-- **Named role** (a defined agent like `web-researcher` or `full` with its system prompt and
-  allowlists) → `runagent <name>`. This is the default path for role launches; the pi-native
-  `subagent` tool path is deprecated in favor of it.
-- **Ad-hoc, model-only** launch with no profile → the raw `run-*-herdr.sh` scripts (they remain
-  for profile-less launches).
+**When to use:** named roles → `runagent <name>` (default path for role launches; the pi-native
+`subagent` tool path is deprecated in favor of it); ad-hoc, model-only → `run-*-herdr.sh`.
 
 ```bash
 runagent --list                                # table of all profiles
@@ -142,8 +151,9 @@ runagent web-researcher -m evo/qwen3.6-35b -w /tmp/scratch -p "..."   # override
 ```
 
 Key options: `-p` (text | `@file` | `-` stdin), `-m` model override, `-w` workspace (sandbox
-writable dir), `-c` cwd, `--env K=V`, `--timeout <ms>`, `--no-wait`, `--keep`/`--no-keep`,
-`--explain`. Stdout contract: progress → stderr; final agent output → stdout prefixed by
+writable dir), `-c` cwd, `--env K=V`, `--ro-bind HOST[:DEST]` / `--bind HOST[:DEST]` (repeatable
+bind mounts), `--label <label>`, `--harness <kind>`, `--timeout <ms>`, `--no-wait`,
+`--keep`/`--no-keep`, `--explain`. Stdout contract: progress → stderr; final agent output → stdout prefixed by
 `=== Agent Output ===` (pipeable from agent sessions; non-tty never attaches and requires `-p`).
 
 **Profile format** (`~/.pi/agent/agents/<name>.md` frontmatter; unknown keys are ignored):
@@ -156,7 +166,7 @@ writable dir), `-c` cwd, `--env K=V`, `--timeout <ms>`, `--no-wait`, `--keep`/`-
 | `skills` | **fail-closed allowlist**: absent = no skills; `[all]` = auto-discovery; explicit names resolved (project `.pi/skills`, `~/.pi/agent/skills`, `~/.agents/skills`, npm packages); unknown name = hard fail (exit 12) |
 | `extensions` | **fail-closed allowlist**, same pattern; resolved against `settings.json` packages (npm + local), dirs resolved to entry files |
 | `mcp` | **fail-closed allowlist**: absent = explicit empty MCP config; `[all]` = global config; listed servers must exist in `mcp-adapter.json` (their inline `env` blocks travel with the server) |
-| `sandbox` | `on` (default) / `off`, or mapping with `workspace:` (pinned writable dir) and `env:` (extra `--env` forwarding). asb sandbox: single writable dir = workspace, system dirs ro, env cleared |
+| `sandbox` | `on` (default) / `off`, or mapping with `workspace:` (pinned writable dir), `env:` (extra `--env` forwarding), `ro_bind:` (read-only bind mounts, `HOST[:DEST]`, `~` expanded) and `bind:` (read-write bind mounts, same syntax). asb sandbox: single writable dir = workspace, system dirs ro, env cleared |
 
 Body = the agent's system prompt (applied via pi `--append-system-prompt` from a temp copy in
 `<workspace>/.runagent/`, removed on exit — host `/tmp` is a private tmpfs inside asb and not
@@ -191,6 +201,10 @@ You can have multiple workspaces in a session, but typically one is enough.
 ## Core CLI
 
 The commands you need day to day. Full surface: [references/cli-reference.md](./references/cli-reference.md).
+
+> **Agent launching is script territory** (`runagent` / `run-*-herdr.sh`). Raw `herdr agent ...`
+> is for *inspecting or managing* agents (`list`, `read`, `attach`, `wait`, `remove`), or for
+> driving a launch step by step when scripts don't fit.
 
 ```bash
 # Server

@@ -199,6 +199,7 @@ get_available_agents() {
 
     for agent_path in "$AGENTS_DIR"/*.md; do
         [[ -f "$agent_path" ]] || continue
+        [[ "$agent_path" == *.chain.md ]] && continue  # legacy chain definitions, not agents
         agents+=("$(basename "$agent_path" .md)")
     done
 
