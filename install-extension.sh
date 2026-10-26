@@ -472,7 +472,7 @@ interactive_installation() {
     done
     echo ""
 
-    read -r -p "Proceed with installation? [y/N] " confirm
+    read -r -p "Proceed with installation? [y/N] " confirm || confirm=""
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         print_warning "Installation cancelled"
         exit 0
@@ -499,6 +499,7 @@ post_install_info() {
     echo ""
     echo "  Installed extensions:"
     for d in "$INSTALL_BASE"/*/; do
+        d="${d%/}"
         if [[ -d "$d" ]]; then
             local name
             name=$(basename "$d")
@@ -563,7 +564,7 @@ main() {
 
     if [[ "$FORCE_MODE" != true ]]; then
         echo ""
-        read -r -p "Proceed with installation? [y/N] " confirm
+        read -r -p "Proceed with installation? [y/N] " confirm || confirm=""
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             print_warning "Installation cancelled"
             exit 0
