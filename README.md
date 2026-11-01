@@ -300,4 +300,5 @@ Some skills in this repo were adapted from other projects — thanks to their au
 
 - [superpowers](https://github.com/obra/superpowers)
 - [agent-skill-creator](https://github.com/FrancyJGLisboa/agent-skill-creator)
+- [excalidraw skill](https://github.com/coleam00/excalidraw-diagram-skill)
 - [obsidian-skills](https://github.com/kepano/obsidian-skills)
